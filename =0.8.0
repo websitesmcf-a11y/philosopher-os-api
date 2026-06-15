@@ -1,0 +1,290 @@
+Collecting fastapi==0.115.0
+  Using cached fastapi-0.115.0-py3-none-any.whl.metadata (27 kB)
+Collecting uvicorn==0.32.1 (from uvicorn[standard]==0.32.1)
+  Using cached uvicorn-0.32.1-py3-none-any.whl.metadata (6.6 kB)
+Collecting pydantic==2.10.1
+  Using cached pydantic-2.10.1-py3-none-any.whl.metadata (169 kB)
+Collecting pydantic-settings==2.7.0
+  Using cached pydantic_settings-2.7.0-py3-none-any.whl.metadata (3.5 kB)
+Collecting sqlalchemy==2.0.36 (from sqlalchemy[asyncio]==2.0.36)
+  Using cached SQLAlchemy-2.0.36-py3-none-any.whl.metadata (9.7 kB)
+Requirement already satisfied: httpx in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (0.28.1)
+Collecting redis==5.2.1
+  Using cached redis-5.2.1-py3-none-any.whl.metadata (9.1 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting python-jose==3.3.0 (from python-jose[cryptography]==3.3.0)
+  Using cached python_jose-3.3.0-py2.py3-none-any.whl.metadata (5.4 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting python-multipart==0.0.18
+  Using cached python_multipart-0.0.18-py3-none-any.whl.metadata (1.8 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting prometheus-client==0.21.1
+  Using cached prometheus_client-0.21.1-py3-none-any.whl.metadata (1.8 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting openai
+  Using cached openai-2.41.1-py3-none-any.whl.metadata (32 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting anthropic
+  Using cached anthropic-0.109.1-py3-none-any.whl.metadata (3.2 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting aiosqlite
+  Using cached aiosqlite-0.22.1-py3-none-any.whl.metadata (4.3 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting python-dotenv==1.0.1
+  Using cached python_dotenv-1.0.1-py3-none-any.whl.metadata (23 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting tenacity
+  Using cached tenacity-9.1.4-py3-none-any.whl.metadata (1.2 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting numpy==2.2.1
+  Downloading numpy-2.2.1.tar.gz (20.2 MB)
+     ---------------------------------------- 20.2/20.2 MB 3.2 MB/s  0:00:06
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): still running...
+  Preparing metadata (pyproject.toml): finished with status 'done'
+WARNING: Cache entry deserialization failed, entry ignored
+WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)': /simple/starlette/
+Collecting starlette<0.39.0,>=0.37.2 (from fastapi==0.115.0)
+  Using cached starlette-0.38.6-py3-none-any.whl.metadata (6.0 kB)
+Requirement already satisfied: typing-extensions>=4.8.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from fastapi==0.115.0) (4.15.0)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting annotated-types>=0.6.0 (from pydantic==2.10.1)
+  Using cached annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting pydantic-core==2.27.1 (from pydantic==2.10.1)
+  WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)': /packages/a6/9f/7de1f19b6aea45aeb441838782d68352e71bfa98ee6fa048d5041991b33e/pydantic_core-2.27.1.tar.gz
+  Downloading pydantic_core-2.27.1.tar.gz (412 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: click>=7.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from uvicorn==0.32.1->uvicorn[standard]==0.32.1) (8.4.1)
+Requirement already satisfied: h11>=0.8 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from uvicorn==0.32.1->uvicorn[standard]==0.32.1) (0.16.0)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting ecdsa!=0.15 (from python-jose==3.3.0->python-jose[cryptography]==3.3.0)
+  Using cached ecdsa-0.19.2-py2.py3-none-any.whl.metadata (29 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting rsa (from python-jose==3.3.0->python-jose[cryptography]==3.3.0)
+  Using cached rsa-4.9.1-py3-none-any.whl.metadata (5.6 kB)
+Requirement already satisfied: pyasn1 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from python-jose==3.3.0->python-jose[cryptography]==3.3.0) (0.6.3)
+Requirement already satisfied: cryptography>=3.4.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from python-jose[cryptography]==3.3.0) (48.0.0)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting greenlet!=0.4.17 (from sqlalchemy[asyncio]==2.0.36)
+  Using cached greenlet-3.5.1-cp314-cp314-win_amd64.whl.metadata (3.9 kB)
+Requirement already satisfied: colorama>=0.4 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from uvicorn[standard]==0.32.1) (0.4.6)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting httptools>=0.6.3 (from uvicorn[standard]==0.32.1)
+  Downloading httptools-0.8.0-cp314-cp314-win_amd64.whl.metadata (3.7 kB)
+Requirement already satisfied: pyyaml>=5.1 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from uvicorn[standard]==0.32.1) (6.0.3)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting watchfiles>=0.13 (from uvicorn[standard]==0.32.1)
+  Downloading watchfiles-1.2.0-cp314-cp314-win_amd64.whl.metadata (5.0 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting websockets>=10.4 (from uvicorn[standard]==0.32.1)
+  Using cached websockets-16.0-cp314-cp314-win_amd64.whl.metadata (7.0 kB)
+Requirement already satisfied: anyio<5,>=3.4.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from starlette<0.39.0,>=0.37.2->fastapi==0.115.0) (4.13.0)
+Requirement already satisfied: idna>=2.8 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from anyio<5,>=3.4.0->starlette<0.39.0,>=0.37.2->fastapi==0.115.0) (3.15)
+Requirement already satisfied: certifi in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from httpx) (2026.5.20)
+Requirement already satisfied: httpcore==1.* in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from httpx) (1.0.9)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting distro<2,>=1.7.0 (from openai)
+  Using cached distro-1.9.0-py3-none-any.whl.metadata (6.8 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting jiter<1,>=0.10.0 (from openai)
+  Using cached jiter-0.15.0-cp314-cp314-win_amd64.whl.metadata (5.3 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting sniffio (from openai)
+  Using cached sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
+Requirement already satisfied: tqdm>4 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from openai) (4.68.1)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting docstring-parser<1,>=0.15 (from anthropic)
+  Using cached docstring_parser-0.18.0-py3-none-any.whl.metadata (3.5 kB)
+Requirement already satisfied: cffi>=2.0.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from cryptography>=3.4.0->python-jose[cryptography]==3.3.0) (2.0.0)
+Requirement already satisfied: pycparser in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from cffi>=2.0.0->cryptography>=3.4.0->python-jose[cryptography]==3.3.0) (3.0)
+Requirement already satisfied: six>=1.9.0 in C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages (from ecdsa!=0.15->python-jose==3.3.0->python-jose[cryptography]==3.3.0) (1.17.0)
+Using cached fastapi-0.115.0-py3-none-any.whl (94 kB)
+Using cached pydantic-2.10.1-py3-none-any.whl (455 kB)
+Using cached uvicorn-0.32.1-py3-none-any.whl (63 kB)
+Using cached pydantic_settings-2.7.0-py3-none-any.whl (29 kB)
+Downloading SQLAlchemy-2.0.36-py3-none-any.whl (1.9 MB)
+   ---------------------------------------- 1.9/1.9 MB 9.6 MB/s  0:00:00
+Using cached redis-5.2.1-py3-none-any.whl (261 kB)
+Using cached python_jose-3.3.0-py2.py3-none-any.whl (33 kB)
+Using cached python_multipart-0.0.18-py3-none-any.whl (24 kB)
+Using cached prometheus_client-0.21.1-py3-none-any.whl (54 kB)
+Using cached python_dotenv-1.0.1-py3-none-any.whl (19 kB)
+Using cached starlette-0.38.6-py3-none-any.whl (71 kB)
+Using cached openai-2.41.1-py3-none-any.whl (1.4 MB)
+Using cached distro-1.9.0-py3-none-any.whl (20 kB)
+Using cached jiter-0.15.0-cp314-cp314-win_amd64.whl (197 kB)
+Using cached anthropic-0.109.1-py3-none-any.whl (923 kB)
+Using cached docstring_parser-0.18.0-py3-none-any.whl (22 kB)
+Using cached aiosqlite-0.22.1-py3-none-any.whl (17 kB)
+Using cached tenacity-9.1.4-py3-none-any.whl (28 kB)
+Using cached annotated_types-0.7.0-py3-none-any.whl (13 kB)
+Using cached ecdsa-0.19.2-py2.py3-none-any.whl (150 kB)
+Using cached greenlet-3.5.1-cp314-cp314-win_amd64.whl (239 kB)
+Downloading httptools-0.8.0-cp314-cp314-win_amd64.whl (92 kB)
+Downloading watchfiles-1.2.0-cp314-cp314-win_amd64.whl (288 kB)
+Using cached websockets-16.0-cp314-cp314-win_amd64.whl (178 kB)
+Using cached rsa-4.9.1-py3-none-any.whl (34 kB)
+Using cached sniffio-1.3.1-py3-none-any.whl (10 kB)
+Building wheels for collected packages: numpy, pydantic-core
+  Building wheel for numpy (pyproject.toml): started
+  Building wheel for numpy (pyproject.toml): finished with status 'done'
+  Created wheel for numpy: filename=numpy-2.2.1-cp314-cp314-win_amd64.whl size=6896051 sha256=42968d7fd5f76273d5e89afcd1efe4dc0a0ad5cc9e606d2468bfd6312eae184d
+  Stored in directory: c:\users\felet\appdata\local\pip\cache\wheels\1c\17\1d\2612d6c326e4151a5107df04a063b9668349712029f5ca25a0
+  Building wheel for pydantic-core (pyproject.toml): started
+  Building wheel for pydantic-core (pyproject.toml): finished with status 'error'
+  error: subprocess-exited-with-error
+  
+  Building wheel for pydantic-core (pyproject.toml) did not run successfully.
+  exit code: 1
+  
+  [116 lines of output]
+  Python reports SOABI: cp314-win_amd64
+  Computed rustc target triple: x86_64-pc-windows-msvc
+  Installation directory: C:\Users\felet\AppData\Local\puccinialin\puccinialin\Cache
+  Rustup already downloaded
+  Installing rust to C:\Users\felet\AppData\Local\puccinialin\puccinialin\Cache\rustup
+  warn: It looks like you have an existing rustup settings file at:
+  warn: C:\Users\felet\AppData\Local\puccinialin\puccinialin\Cache\rustup\settings.toml
+  warn: Rustup will install the default toolchain as specified in the settings file,
+  warn: instead of the one inferred from the default host triple.
+  info: profile set to minimal
+  info: setting default host triple to x86_64-pc-windows-msvc
+  warn: Updating existing toolchain, profile choice will be ignored
+  info: syncing channel updates for stable-x86_64-pc-windows-msvc
+  info: default toolchain set to stable-x86_64-pc-windows-msvc
+  Checking if cargo is installed
+  cargo 1.96.0 (30a34c682 2026-05-25)
+  Rust not found, installing into a temporary directory
+  Running `maturin pep517 build-wheel -i C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\python.exe --compatibility off`
+  ðŸ“¦ Including license file `LICENSE`
+  ðŸ\x8d¹ Building a mixed python/rust project
+  ðŸ\x90\x8d Found CPython 3.14 at C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\python.exe
+  ðŸ”— Found pyo3 bindings
+  ðŸ“¡ Using build options features, bindings from pyproject.toml
+     Compiling proc-macro2 v1.0.86
+     Compiling unicode-ident v1.0.12
+     Compiling target-lexicon v0.12.14
+     Compiling cc v1.0.101
+     Compiling once_cell v1.19.0
+     Compiling autocfg v1.3.0
+     Compiling stable_deref_trait v1.2.0
+     Compiling heck v0.5.0
+     Compiling litemap v0.7.3
+     Compiling version_check v0.9.5
+     Compiling writeable v0.5.5
+     Compiling rustversion v1.0.17
+     Compiling libc v0.2.155
+     Compiling num-traits v0.2.19
+     Compiling memoffset v0.9.1
+     Compiling icu_locid_transform_data v1.5.0
+     Compiling cfg-if v1.0.0
+     Compiling python3-dll-a v0.2.10
+     Compiling static_assertions v1.1.0
+     Compiling quote v1.0.36
+     Compiling tinyvec_macros v0.1.1
+     Compiling radium v0.7.0
+     Compiling memchr v2.7.4
+     Compiling tinyvec v1.6.1
+     Compiling lexical-util v0.8.5
+     Compiling syn v2.0.82
+     Compiling pyo3-build-config v0.22.6
+     Compiling num-integer v0.1.46
+     Compiling ahash v0.8.11
+     Compiling smallvec v1.13.2
+     Compiling icu_properties_data v1.5.0
+     Compiling serde v1.0.214
+     Compiling tap v1.0.1
+     Compiling num-bigint v0.4.6
+     Compiling wyz v0.5.1
+     Compiling lexical-parse-integer v0.8.6
+     Compiling unicode-normalization v0.1.23
+     Compiling aho-corasick v1.1.3
+     Compiling getrandom v0.2.15
+     Compiling equivalent v1.0.1
+     Compiling utf16_iter v1.0.5
+     Compiling unindent v0.2.3
+     Compiling serde_json v1.0.132
+     Compiling write16 v1.0.0
+     Compiling zerocopy v0.7.34
+     Compiling funty v2.0.0
+     Compiling indoc v2.0.5
+     Compiling utf8_iter v1.0.4
+     Compiling pyo3-macros-backend v0.22.6
+     Compiling pyo3-ffi v0.22.6
+     Compiling pyo3 v0.22.6
+     Compiling jiter v0.7.1
+     Compiling regex-syntax v0.8.5
+     Compiling unicode-bidi v0.3.15
+     Compiling icu_normalizer_data v1.5.0
+     Compiling percent-encoding v2.3.1
+  error: failed to run custom build command for `pyo3-ffi v0.22.6`
+  
+  Caused by:
+    process didn't exit successfully: `C:\Users\felet\AppData\Local\Temp\pip-install-toreggbt\pydantic-core_253f23ddc74b48ac9ee4a88c4abff630\target\release\build\pyo3-ffi-137b54c1a93758f2\build-script-build` (exit code: 1)
+    --- stdout
+    cargo:rustc-check-cfg=cfg(Py_LIMITED_API)
+    cargo:rustc-check-cfg=cfg(PyPy)
+    cargo:rustc-check-cfg=cfg(GraalPy)
+    cargo:rustc-check-cfg=cfg(py_sys_config, values("Py_DEBUG", "Py_REF_DEBUG", "Py_TRACE_REFS", "COUNT_ALLOCS"))
+    cargo:rustc-check-cfg=cfg(invalid_from_utf8_lint)
+    cargo:rustc-check-cfg=cfg(pyo3_disable_reference_pool)
+    cargo:rustc-check-cfg=cfg(pyo3_leak_on_drop_without_reference_pool)
+    cargo:rustc-check-cfg=cfg(diagnostic_namespace)
+    cargo:rustc-check-cfg=cfg(c_str_lit)
+    cargo:rustc-check-cfg=cfg(Py_3_7)
+    cargo:rustc-check-cfg=cfg(Py_3_8)
+    cargo:rustc-check-cfg=cfg(Py_3_9)
+    cargo:rustc-check-cfg=cfg(Py_3_10)
+    cargo:rustc-check-cfg=cfg(Py_3_11)
+    cargo:rustc-check-cfg=cfg(Py_3_12)
+    cargo:rustc-check-cfg=cfg(Py_3_13)
+    cargo:rerun-if-env-changed=PYO3_CROSS
+    cargo:rerun-if-env-changed=PYO3_CROSS_LIB_DIR
+    cargo:rerun-if-env-changed=PYO3_CROSS_PYTHON_VERSION
+    cargo:rerun-if-env-changed=PYO3_CROSS_PYTHON_IMPLEMENTATION
+    cargo:rerun-if-env-changed=PYO3_PRINT_CONFIG
+    cargo:rerun-if-env-changed=PYO3_USE_ABI3_FORWARD_COMPATIBILITY
+  
+    --- stderr
+    error: the configured Python interpreter version (3.14) is newer than PyO3's maximum supported version (3.13)
+    = help: please check if an updated version of PyO3 is available. Current version: 0.22.6
+    = help: set PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 to suppress this check and build anyway using the stable ABI
+  warning: build failed, waiting for other jobs to finish...
+  ðŸ’¥ maturin failed
+    Caused by: Failed to build a native library through cargo
+    Caused by: Cargo build finished with "exit code: 101": `"cargo" "rustc" "--profile" "release" "--features" "pyo3/extension-module" "--message-format" "json-render-diagnostics" "--manifest-path" "C:\\Users\\felet\\AppData\\Local\\Temp\\pip-install-toreggbt\\pydantic-core_253f23ddc74b48ac9ee4a88c4abff630\\Cargo.toml" "--lib" "--crate-type" "cdylib"`
+  Error: command ['maturin', 'pep517', 'build-wheel', '-i', 'C:\\Users\\felet\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe', '--compatibility', 'off'] returned non-zero exit status 1
+  [end of output]
+  
+  note: This error originates from a subprocess, and is likely not a problem with pip.
+  ERROR: Failed building wheel for pydantic-core
+Successfully built numpy
+Failed to build pydantic-core
+
+[notice] A new release of pip is available: 26.1.1 -> 26.1.2
+[notice] To update, run: C:\Users\felet\AppData\Local\Python\pythoncore-3.14-64\python.exe -m pip install --upgrade pip
+error: failed-wheel-build-for-install
+
+Failed to build installable wheels for some pyproject.toml based projects
+
+pydantic-core
