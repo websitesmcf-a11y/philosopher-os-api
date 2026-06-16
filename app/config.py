@@ -8,7 +8,12 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     api_url: Optional[str] = "http://localhost:8000"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://philosopher-os.vercel.app",
+        "https://philosopher-os-frontend2.vercel.app",
+    ]
     log_level: str = "INFO"
     log_format: str = "json"  # "json" or "text"
     enable_request_id: bool = True
