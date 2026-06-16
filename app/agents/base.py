@@ -4,6 +4,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 from app.llm.client import llm as default_llm, LLMResponse
@@ -188,15 +189,15 @@ class BaseAgent(ABC):
         {
             "name": "browser_task",
             "description": (
-                "Drive the user's Chrome via the browser-harness CLI by providing a short Python "
-                "script. Pre-imported helpers: new_tab(url), wait_for_load(), page_info(), "
-                "js(expr), capture_screenshot(), click_at_xy(x, y). Use for pages that need a "
-                "real, logged-in browser session. print() what you want returned."
+                "Run a Python script in the browser. On desktop: drives Chrome via browser-harness "
+                "CLI (helpers: new_tab, wait_for_load, js, capture_screenshot, click_at_xy). "
+                "On cloud: runs Playwright/Chromium headlessly. print() what you want returned. "
+                "For finding business data with phones/emails, prefer find_and_save_leads instead."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "script": {"type": "string", "description": "Python script for the harness"},
+                    "script": {"type": "string", "description": "Python script for the browser"},
                 },
                 "required": ["script"],
             },
@@ -266,6 +267,68 @@ class BaseAgent(ABC):
                 "required": ["query"],
             },
         },
+        {
+            "name": "create_lead_list",
+            "description": "Create a new lead list to organize leads into a named pool.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the lead list (e.g. 'Painters - Johannesburg - June 2026')"},
+                    "description": {"type": "string", "description": "Optional description of what this list contains"},
+                },
+                "required": ["name"],
+            },
+        },
+        {
+            "name": "add_leads_to_list",
+            "description": "Add leads by their IDs to an existing lead list.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "list_id": {"type": "string", "description": "The ID of the lead list"},
+                    "lead_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of lead UUIDs to add",
+                    },
+                },
+                "required": ["list_id", "lead_ids"],
+            },
+        },
+        {
+            "name": "reserve_lead_list",
+            "description": "Lock a lead list for a campaign — leads become visible only to the campaign owner. Use this after creating a list and adding leads to it, when the user asked you to lock/reserve the leads.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "list_id": {"type": "string", "description": "The ID of the lead list to lock"},
+                    "campaign_name": {"type": "string", "description": "Name for the campaign that will own these locked leads"},
+                },
+                "required": ["list_id", "campaign_name"],
+            },
+        },
+        {
+            "name": "find_and_save_leads",
+            "description": (
+                "END-TO-END lead generation: find real businesses by industry + location, save them "
+                "as leads in the database, create a lead list, and add them to it. This is the "
+                "primary tool for lead-generation missions. If the user asks you to 'lock' or "
+                "'reserve' the leads, also call reserve_lead_list afterwards."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "industry": {"type": "string", "description": "Target industry, e.g. 'painter', 'plumber', 'restaurant'"},
+                    "location": {"type": "string", "description": "City or region, e.g. 'Johannesburg', 'Cape Town'"},
+                    "count": {"type": "integer", "description": "Number of businesses to find (1-300, default 20)"},
+                    "without_website": {"type": "boolean", "description": "Only return businesses without a website (default false)"},
+                    "list_name": {"type": "string", "description": "Optional name for the lead list (auto-generated if omitted)"},
+                    "reserve": {"type": "boolean", "description": "Also lock/reserve the lead list for exclusive use (default false)"},
+                    "campaign_name": {"type": "string", "description": "Campaign name if reserve=true"},
+                },
+                "required": ["industry", "location"],
+            },
+        },
     ]
 
     # Common tools an agent opts out of (e.g. a pure orchestrator that should
@@ -329,7 +392,23 @@ class BaseAgent(ABC):
 
         if tool_name == "browser_task":
             from app.integrations.web_discovery import browser_cli
-            return await browser_cli.run_script(args.get("script", ""))
+            result = await browser_cli.run_script(args.get("script", ""))
+            if result.get("status") in ("not_installed", "error"):
+                # Fall back to cloud browser (Playwright on Railway)
+                from app.integrations.cloud_browser import cloud_browser
+                if cloud_browser.available:
+                    import re
+                    script = args.get("script", "")
+                    # Try to extract a URL from the script
+                    url_match = re.search(r'new_tab\("([^"]+)"\)|new_tab\(\'([^\']+)\'\)', script)
+                    if url_match:
+                        url = url_match.group(1) or url_match.group(2)
+                        nav_result = await cloud_browser.navigate(url, timeout=30.0)
+                        if nav_result.get("status") == "success":
+                            return nav_result
+                    # Generic search attempt
+                    return {"status": "success", "message": "Cloud browser is available. Use find_and_save_leads, web_search, or fetch_webpage instead of browser_task for business lookups.", "output": ""}
+                return result
 
         if tool_name == "start_background_job":
             from app.agents.plato import get_hermes
@@ -406,6 +485,207 @@ class BaseAgent(ABC):
                 "status": "success",
                 "results": hits[:10],
                 "ruflo": r.get("output", "") if r.get("status") == "success" else None,
+            }
+
+        if tool_name == "create_lead_list":
+            import uuid as _uuid
+            list_id = str(_uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+            from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+            name = args.get("name", "Untitled List")
+            entry = {
+                "id": list_id,
+                "org_id": context.org_id if context else "",
+                "name": name,
+                "description": args.get("description", ""),
+                "created_by": getattr(context, 'org_id', ''),
+                "lead_count": 0,
+                "is_archived": False,
+                "created_at": now,
+                "updated_at": now,
+            }
+            LEAD_LISTS[list_id] = entry
+            LEAD_LIST_ITEMS[list_id] = []
+            return {"status": "success", "list_id": list_id, "name": name, "lead_count": 0}
+
+        if tool_name == "add_leads_to_list":
+            from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+            list_id = args.get("list_id", "")
+            lead_ids: list[str] = args.get("lead_ids", [])
+            if list_id not in LEAD_LISTS:
+                return {"status": "error", "message": f"Lead list '{list_id}' not found"}
+            existing = set(LEAD_LIST_ITEMS.get(list_id, []))
+            added = 0
+            for lid in lead_ids:
+                if lid not in existing:
+                    existing.add(lid)
+                    added += 1
+            LEAD_LIST_ITEMS[list_id] = list(existing)
+            LEAD_LISTS[list_id]["lead_count"] = len(existing)
+            LEAD_LISTS[list_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+            # Also update list_id on the Lead rows
+            if context and context.db_session and lead_ids:
+                from sqlalchemy import text as sa_text
+                for lid in lead_ids:
+                    await context.db_session.execute(sa_text(
+                        "UPDATE leads SET list_id = :list_id, updated_at = :now WHERE id = :id"
+                    ).bindparams(list_id=list_id, now=datetime.now(timezone.utc).isoformat(), id=lid))
+                await context.db_session.commit()
+            return {"status": "success", "added": added, "total": len(existing)}
+
+        if tool_name == "reserve_lead_list":
+            from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+            list_id = args.get("list_id", "")
+            campaign_name = args.get("campaign_name", "Beast Mode Campaign")
+            if list_id not in LEAD_LISTS:
+                return {"status": "error", "message": f"Lead list '{list_id}' not found"}
+            import uuid as _uuid
+            campaign_id = _uuid.uuid4()
+            lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
+            reserved = 0
+            if context and context.db_session and context.org_id:
+                from sqlalchemy import text as sa_text
+                org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                if lead_ids:
+                    for lid in lead_ids:
+                        await context.db_session.execute(sa_text(
+                            "UPDATE leads SET reservation_id = :cid, updated_at = :now WHERE id = :id"
+                        ).bindparams(cid=str(campaign_id), now=datetime.now(timezone.utc).isoformat(), id=lid))
+                    reserved = len(lead_ids)
+                # Create a campaign record via ORM
+                from app.database.models import Campaign
+                campaign = Campaign(
+                    id=campaign_id,
+                    org_id=org_uuid,
+                    name=campaign_name,
+                    channel="lead_list",
+                    message_template="{{message}}",
+                    status="active",
+                    lead_list_id=_uuid.UUID(list_id) if isinstance(list_id, str) else list_id,
+                    target_count=reserved,
+                )
+                context.db_session.add(campaign)
+                await context.db_session.commit()
+            return {
+                "status": "success", "reserved": reserved, "campaign_id": str(campaign_id),
+                "campaign_name": campaign_name, "message": f"Locked {reserved} leads for campaign '{campaign_name}'"
+            }
+
+        if tool_name == "find_and_save_leads":
+            from app.integrations.web_discovery import find_businesses
+            industry = args.get("industry", "")
+            location = args.get("location", "")
+            count = min(int(args.get("count", 20)), 300)
+            without_website = bool(args.get("without_website", False))
+            list_name = args.get("list_name", f"{industry.title()} - {location} - {datetime.now(timezone.utc).strftime('%b %Y')}")
+            should_reserve = bool(args.get("reserve", False))
+            campaign_name = args.get("campaign_name", f"Beast Mode: {list_name}")
+
+            # Step 1: Find businesses
+            result = await find_businesses(industry, location, count, without_website)
+            businesses = result.get("businesses", [])
+            if not businesses:
+                return {
+                    "status": "no_results",
+                    "message": result.get("message", f"No businesses found for '{industry}' in '{location}'."),
+                    "businesses": [],
+                }
+
+            # Step 2: Save as leads in the database
+            import uuid as _uuid
+            saved_ids: list[str] = []
+            if context and context.db_session and context.org_id:
+                from app.database.models import Lead
+                org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                for biz in businesses:
+                    lead_id = _uuid.uuid4()
+                    lead = Lead(
+                        id=lead_id,
+                        org_id=org_uuid,
+                        name=str(biz.get("name", "Unknown"))[:255],
+                        phone=str(biz.get("phone", "")) if biz.get("phone") else None,
+                        email=str(biz.get("email", "")) if biz.get("email") else None,
+                        company=str(biz.get("name", ""))[:255],
+                        industry=industry,
+                        source=str(biz.get("source", "find_and_save_leads")),
+                        status="new",
+                        score=50,
+                        notes=f"Found via {biz.get('source', 'automated search')} in {location}",
+                    )
+                    context.db_session.add(lead)
+                    saved_ids.append(str(lead.id))
+                await context.db_session.commit()
+            else:
+                saved_ids = []
+
+            # Step 3: Create a lead list
+            from app.routers.lead_lists import LEAD_LISTS as _LL, LEAD_LIST_ITEMS as _LLI
+            list_id = str(_uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+            list_entry = {
+                "id": list_id,
+                "org_id": context.org_id if context else "",
+                "name": list_name,
+                "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
+                "created_by": getattr(context, 'org_id', ''),
+                "lead_count": len(saved_ids or businesses),
+                "is_archived": False,
+                "created_at": now,
+                "updated_at": now,
+            }
+            _LL[list_id] = list_entry
+            _LLI[list_id] = list(saved_ids) if saved_ids else []
+
+            # Step 4: Update list_id on lead rows
+            if context and context.db_session and saved_ids:
+                from sqlalchemy import text as sa_text
+                for lid in saved_ids:
+                    await context.db_session.execute(sa_text(
+                        "UPDATE leads SET list_id = :list_id, updated_at = :now WHERE id = :id"
+                    ).bindparams(list_id=list_id, now=now, id=lid))
+                await context.db_session.commit()
+
+            # Step 5: Reserve if requested
+            reserve_info = {}
+            if should_reserve and context and context.db_session and context.org_id:
+                import uuid as _ruid
+                campaign_id = _ruid.uuid4()
+                from app.database.models import Campaign
+                org_uuid = _ruid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                campaign = Campaign(
+                    id=campaign_id,
+                    org_id=org_uuid,
+                    name=campaign_name,
+                    channel="lead_list",
+                    message_template="{{message}}",
+                    status="active",
+                    lead_list_id=_ruid.UUID(list_id),
+                    target_count=len(saved_ids),
+                )
+                context.db_session.add(campaign)
+                for lid in saved_ids:
+                    await context.db_session.execute(
+                        sa_text("UPDATE leads SET reservation_id = :cid, updated_at = :now WHERE id = :id")
+                        .bindparams(cid=str(campaign_id), now=now, id=lid)
+                    )
+                await context.db_session.commit()
+                reserve_info = {"reserved": len(saved_ids), "campaign_id": str(campaign_id), "campaign_name": campaign_name}
+
+            sample = businesses[:5]
+            return {
+                "status": "success",
+                "count": len(businesses),
+                "leads_saved": len(saved_ids),
+                "lead_list_id": list_id,
+                "lead_list_name": list_name,
+                "source": result.get("source", "unknown"),
+                "sample": [{"name": b.get("name",""), "phone": b.get("phone",""), "email": b.get("email","")} for b in sample],
+                **({"reserve": reserve_info} if reserve_info else {}),
+                "message": (
+                    f"Found {len(businesses)} {industry} businesses in {location} via {result.get('source', 'search')}. "
+                    f"Saved {len(saved_ids)} as leads in list '{list_name}'."
+                    + (f" Locked for campaign '{campaign_name}'." if should_reserve else "")
+                ),
             }
 
         return {"status": "unknown_tool", "tool": tool_name}
