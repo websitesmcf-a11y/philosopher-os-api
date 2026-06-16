@@ -46,8 +46,8 @@ class BrowserHarnessBridge:
         self._lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future] = {}
         self._connected = False
-        self._disconnect_at: float | None = None  # monotonic time when grace started
-        self._last_seen: float | None = None       # monotonic time of last message or connect
+        self._disconnect_at: float | None = None  # time.monotonic() when grace started
+        self._last_seen: float | None = None       # time.time() of last message or connect
         self._client_available = False
         self._client_info: dict = {}
 
@@ -89,7 +89,7 @@ class BrowserHarnessBridge:
             self._ws = ws
             self._connected = True
             self._disconnect_at = None
-            self._last_seen = time.monotonic()
+            self._last_seen = time.time()
             self._client_available = False
             self._client_info = {}
             logger.info("Browser harness client connected")
@@ -117,7 +117,7 @@ class BrowserHarnessBridge:
         except json.JSONDecodeError:
             return
 
-        self._last_seen = time.monotonic()  # any message = client alive
+        self._last_seen = time.time()  # any message = client alive
 
         msg_type = msg.get("type")
 
