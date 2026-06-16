@@ -75,47 +75,134 @@ class CloudBrowser:
             logger.warning(f"CloudBrowser navigate failed for {url}: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def search_google(self, query: str, count: int = 5) -> list[dict]:
-        """Search Google via the cloud browser and extract organic results."""
+    async def search_google(self, query: str, count: int = 10) -> list[dict]:
+        """Search Google via the cloud browser and extract organic results with snippets."""
         results = []
         try:
             await self._ensure_browser()
             page = await self._browser.new_page()
-            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}&hl=en"
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
 
             import re
             from urllib.parse import urlparse, parse_qs
 
-            links = await page.query_selector_all("a")
-            for link in links[:50]:
+            # Try to extract result blocks (title + snippet pairs)
+            result_blocks = await page.query_selector_all("div.g, div[data-hveid]")
+            for block in result_blocks[:count * 2]:
                 try:
-                    href = await link.get_attribute("href")
-                    full_text = await link.inner_text()
-                    if not href or not full_text:
+                    link_el = await block.query_selector("a[href]")
+                    if not link_el:
                         continue
-                    full_text = full_text.strip()
-                    if len(full_text) < 10:
+                    href = await link_el.get_attribute("href")
+                    title_el = await block.query_selector("h3")
+                    title = await title_el.inner_text() if title_el else ""
+                    snippet_el = await block.query_selector("div[data-sncf], span.aCOpRe, span.VuuXrf, div.lEBKkf")
+                    snippet = await snippet_el.inner_text() if snippet_el else ""
+                    if not href or not title:
                         continue
-                    # Decode Google redirect URLs
                     if href.startswith("/url?"):
                         parsed = urlparse(href)
                         qs = parse_qs(parsed.query)
                         href = qs.get("q", [href])[0]
                     if href.startswith("http") and "google.com" not in href:
                         results.append({
-                            "title": full_text[:200],
+                            "title": title.strip()[:200],
                             "url": href,
+                            "snippet": snippet.strip()[:300] if snippet else "",
                         })
                         if len(results) >= count:
                             break
                 except Exception:
                     continue
 
+            # Fallback: extract from all links if block-based didn't find enough
+            if len(results) < count:
+                links = await page.query_selector_all("a[href]")
+                seen_urls = {r["url"] for r in results}
+                for link in links:
+                    try:
+                        href = await link.get_attribute("href")
+                        text = await link.inner_text()
+                        if not href or not text:
+                            continue
+                        text = text.strip()
+                        if len(text) < 10:
+                            continue
+                        if href.startswith("/url?"):
+                            parsed = urlparse(href)
+                            qs = parse_qs(parsed.query)
+                            href = qs.get("q", [href])[0]
+                        if href.startswith("http") and "google.com" not in href and href not in seen_urls:
+                            seen_urls.add(href)
+                            results.append({
+                                "title": text[:200],
+                                "url": href,
+                                "snippet": "",
+                            })
+                            if len(results) >= count:
+                                break
+                    except Exception:
+                        continue
+
             await page.close()
         except Exception as e:
             logger.warning(f"CloudBrowser Google search failed: {e}")
         return results
+
+    async def scrape_business_directory(self, url: str) -> list[dict]:
+        """Navigate to a business directory page and extract listings with phone numbers."""
+        import re
+        listings = []
+        try:
+            await self._ensure_browser()
+            page = await self._browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            body_text = await page.inner_text("body")
+            lines = [l.strip() for l in body_text.split("\n") if l.strip()]
+
+            # Try structured extraction from common directory patterns
+            cards = await page.query_selector_all(
+                "[class*='listing'], [class*='result'], [class*='business'], "
+                "[class*='card'], [class*='item'], li[class*='listing'], "
+                "div[class*='listing'], tr[class*='listing']"
+            )
+            if cards:
+                for card in cards[:50]:
+                    try:
+                        card_text = await card.inner_text()
+                        card_html = await card.inner_html() if hasattr(card, 'inner_html') else ""
+                        phone = ""
+                        phone_match = re.search(
+                            r'(\+?\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4})',
+                            card_text
+                        )
+                        if phone_match:
+                            phone = phone_match.group(1).strip()
+                        # First line is usually the name
+                        name = (card_text.split("\n")[0] or "").strip()[:200]
+                        if name and len(name) > 2 and name not in ("Home", "About", "Contact", "Listings"):
+                            listings.append({"name": name, "phone": phone, "source": url})
+                    except Exception:
+                        continue
+
+            # Fallback: extract name + phone pairs from raw text
+            if not listings:
+                phone_pattern = re.compile(
+                    r'([A-Z][a-zA-Z\s&.\'-]{2,60}?)\s*[:\-]?\s*((?:\+?\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}))'
+                )
+                for match in phone_pattern.finditer(body_text):
+                    name = match.group(1).strip()
+                    phone = match.group(2).strip()
+                    if name and phone and len(name) > 2:
+                        listings.append({"name": name, "phone": phone, "source": url})
+
+            await page.close()
+        except Exception as e:
+            logger.warning(f"CloudBrowser directory scrape failed for {url}: {e}")
+        return listings
 
     async def extract_text(self, selector: str, timeout: float = 15.0) -> dict:
         """Extract text from the currently loaded page using a CSS selector."""
