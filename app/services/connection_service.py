@@ -388,13 +388,20 @@ class ConnectionService:
         """Save a browser harness token. Auto-generate one if not provided."""
         from app.services.browser_harness_bridge import bridge
 
-        token = (secrets.get("token") or "").strip()
-        if not token:
-            import uuid
-            token = str(uuid.uuid4())
-
+        # Load existing row first so we don't regenerate the token on re-save
         result = await self.db.execute(select(Integration).where(Integration.provider == "browser_harness"))
         row = result.scalar_one_or_none()
+
+        token = (secrets.get("token") or "").strip()
+        if not token:
+            # Reuse existing token instead of generating a new one each time
+            if row and row.credentials_enc:
+                existing = decrypt_dict(row.credentials_enc)
+                token = existing.get("token", "")
+            if not token:
+                import uuid
+                token = str(uuid.uuid4())
+
         if row is None:
             row = Integration(provider="browser_harness")
             self.db.add(row)
