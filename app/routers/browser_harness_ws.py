@@ -68,6 +68,15 @@ async def get_harness_token(db: AsyncSession = Depends(get_db)):
     return {"token": token}
 
 
+@router.post("/test-script")
+async def test_browser_script(body: dict):
+    """TEMP: Test a browser script through the bridge."""
+    from fastapi.responses import JSONResponse
+    script = body.get("script", "print('hello from bridge')")
+    result = await bridge.run_script_safe(script, timeout=30.0)
+    return JSONResponse(result)
+
+
 @router.get("/agent-script")
 async def download_agent_script():
     """Return the Python CLI agent script for download.
