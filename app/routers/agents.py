@@ -26,7 +26,7 @@ def _agent_status_list(request: Request) -> list[dict]:
     ]
 
 
-@router.get("/")
+@router.get("")
 async def list_agents(
     request: Request,
     user: dict = Depends(get_current_user),

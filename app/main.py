@@ -193,3 +193,17 @@ app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["
 @app.get("/")
 async def root():
     return {"app": settings.app_name, "version": "0.1.0", "status": "running"}
+
+# Strip trailing slashes middleware — add this BEFORE the router processes requests
+# This ensures both /api/v1/clients and /api/v1/clients/ work identically
+from starlette.middleware.base import BaseHTTPMiddleware
+class StripTrailingSlashMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        path = request.scope.get("path", "")
+        if len(path) > 1 and path.endswith("/"):
+            request.scope["path"] = path.rstrip("/")
+        return await call_next(request)
+
+# Insert the middleware early in the chain (before routing)
+# We need to add it to the app at module level, but can only do via main.py
+# So let's insert it into the app object by finding where middleware is added

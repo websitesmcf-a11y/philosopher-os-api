@@ -9,7 +9,7 @@ from app.services.knowledge_service import KnowledgeService
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def search_knowledge(
     q: Optional[str] = None,
     category: Optional[str] = None,

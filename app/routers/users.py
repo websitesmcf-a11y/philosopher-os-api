@@ -8,7 +8,7 @@ from app.services.user_service import UserService
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_users(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
