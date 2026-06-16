@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -25,6 +26,7 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 _COMMAND_TIMEOUT = 150.0  # max seconds to wait for a command result
+_RECONNECT_GRACE = 12.0  # seconds — absorb reconnection blips without flipping status
 
 
 class BrowserHarnessBridge:
@@ -32,6 +34,11 @@ class BrowserHarnessBridge:
 
     Only one harness client can be connected at a time — if another connects,
     the previous one is disconnected.
+
+    Grace period: when the WebSocket drops, the bridge doesn't immediately
+    report ``connected: false``. It waits up to ``_RECONNECT_GRACE`` seconds
+    for the client to reconnect before flipping the flag. This prevents status
+    flicker during network blips or Railway deploy reconnections.
     """
 
     def __init__(self):
@@ -39,26 +46,35 @@ class BrowserHarnessBridge:
         self._lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future] = {}
         self._connected = False
-        self._client_available = False  # whether the client's browser-harness CLI works
-        self._client_info: dict = {}  # extra status from the client
+        self._disconnect_at: float | None = None  # monotonic time when grace started
+        self._last_seen: float | None = None       # monotonic time of last message or connect
+        self._client_available = False
+        self._client_info: dict = {}
 
     # ── Connection lifecycle ──────────────────────────────────────────
 
     @property
     def connected(self) -> bool:
-        return self._connected
+        if self._connected:
+            return True
+        # Grace period: still report True while waiting for reconnect
+        if self._disconnect_at is not None:
+            elapsed = time.monotonic() - self._disconnect_at
+            if elapsed < _RECONNECT_GRACE:
+                return True
+        return False
 
     @property
     def client_available(self) -> bool:
-        """True when a harness is connected AND its local browser-harness CLI is functional."""
-        return self._connected and self._client_available
+        return self.connected and self._client_available
 
     @property
     def status(self) -> dict:
         return {
-            "connected": self._connected,
+            "connected": self.connected,
             "available": self.client_available,
             "client_info": self._client_info,
+            "last_seen": self._last_seen,
         }
 
     async def connect(self, ws: WebSocket) -> None:
@@ -72,23 +88,26 @@ class BrowserHarnessBridge:
                     pass
             self._ws = ws
             self._connected = True
+            self._disconnect_at = None
+            self._last_seen = time.monotonic()
             self._client_available = False
             self._client_info = {}
             logger.info("Browser harness client connected")
 
     async def disconnect(self) -> None:
-        """Clean up on client disconnect or error."""
+        """Called on WebSocket drop — enters grace period instead of flipping immediately."""
         async with self._lock:
+            if not self._connected:
+                return
             self._connected = False
-            self._client_available = False
-            self._client_info = {}
-            # Fail all pending commands
+            self._disconnect_at = time.monotonic()
+            self._ws = None
+            # Fail all pending commands immediately (don't let them hang)
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(RuntimeError("Harness disconnected"))
             self._pending.clear()
-            self._ws = None
-            logger.info("Browser harness client disconnected")
+            logger.info("Browser harness disconnected — grace period started (%.0fs)", _RECONNECT_GRACE)
 
     async def handle_message(self, raw: str) -> None:
         """Process an incoming WebSocket message from the harness client."""
@@ -96,6 +115,8 @@ class BrowserHarnessBridge:
             msg = json.loads(raw)
         except json.JSONDecodeError:
             return
+
+        self._last_seen = time.monotonic()  # any message = client alive
 
         msg_type = msg.get("type")
 
@@ -176,12 +197,17 @@ class BrowserHarnessBridge:
     @property
     def agent_info(self) -> dict:
         """Human-readable info about the connected harness for the frontend."""
+        from datetime import datetime, timezone
+        last_seen_iso = None
+        if self._last_seen:
+            last_seen_iso = datetime.fromtimestamp(self._last_seen, tz=timezone.utc).isoformat()
         return {
-            "connected": self._connected,
+            "connected": self.connected,
             "available": self.client_available,
             "browser": self._client_info.get("browser"),
             "cdp": self._client_info.get("cdp", False),
             "version": self._client_info.get("harness_version", ""),
+            "last_seen": last_seen_iso,
         }
 
 
