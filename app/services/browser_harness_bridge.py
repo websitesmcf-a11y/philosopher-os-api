@@ -102,7 +102,8 @@ class BrowserHarnessBridge:
             self._connected = False
             self._disconnect_at = time.monotonic()
             self._ws = None
-            # Fail all pending commands immediately (don't let them hang)
+            self._client_available = False
+            # Keep _client_info so the status endpoint shows "last known" state
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(RuntimeError("Harness disconnected"))
