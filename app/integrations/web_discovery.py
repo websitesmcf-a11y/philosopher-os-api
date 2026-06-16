@@ -221,6 +221,29 @@ async def find_businesses(
         except Exception as e:
             logger.warning(f"Google Maps scrape failed for {industry!r}/{location!r}: {e}")
 
+    # 1b) Google Maps / web search via cloud browser (Playwright on Railway).
+    if not businesses:
+        from app.integrations.cloud_browser import cloud_browser
+        if cloud_browser.available:
+            try:
+                results = await cloud_browser.search_google(
+                    f"{industry} in {location} contact phone email", count=20
+                )
+                if results:
+                    seen_names = {b["name"].lower() for b in businesses}
+                    for r in results:
+                        name = r["title"][:200]
+                        if name.lower() not in seen_names:
+                            seen_names.add(name.lower())
+                            businesses.append({
+                                "name": name,
+                                "website": r["url"],
+                                "source": "cloud_search",
+                            })
+                    source_used = source_used or "cloud_search"
+            except Exception as e:
+                logger.warning(f"Cloud browser search failed: {e}")
+
     # 2) OpenStreetMap fallback.
     if len(businesses) < count:
         try:

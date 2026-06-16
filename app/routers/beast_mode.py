@@ -20,14 +20,44 @@ class ExecuteMissionRequest(BaseModel):
 
 @router.get("/status")
 async def get_beast_mode_status():
-    """Check Beast Mode availability and RUflow status."""
-    from app.services.beast_mode import beast_mode as bm
+    """Check Beast Mode availability and level info."""
+    from app.services.beast_mode import beast_mode as bm, BeastLevel, level_name, agents_for_level, tools_for_level
+
     ruflow_ok = await bm.check_ruflow()
+    banking_ok = bm._check_banking()
+
+    levels = []
+    for lv in BeastLevel:
+        levels.append({
+            "id": lv.value,
+            "label": level_name(lv),
+            "agents_available": agents_for_level(lv),
+            "tools_available": list(tools_for_level(lv)),
+        })
+
     return {
         "available": True,
         "ruflow_connected": ruflow_ok,
+        "banking_configured": banking_ok,
         "max_agents": 15,
-        "levels_available": ["dry_run", "assisted", "approved", "full"],
+        "levels": levels,
+        "all_agents": [
+            {"id": "plato", "name": "Plato", "tier": "philosopher"},
+            {"id": "socrates", "name": "Socrates", "tier": "philosopher"},
+            {"id": "heraclitus", "name": "Heraclitus", "tier": "philosopher"},
+            {"id": "pythagoras", "name": "Pythagoras", "tier": "philosopher"},
+            {"id": "solon", "name": "Solon", "tier": "philosopher"},
+            {"id": "aristotle", "name": "Aristotle", "tier": "extended"},
+            {"id": "athena", "name": "Athena", "tier": "extended"},
+            {"id": "leonidas", "name": "Leonidas", "tier": "extended"},
+            {"id": "archimedes", "name": "Archimedes", "tier": "extended"},
+            {"id": "odysseus", "name": "Odysseus", "tier": "extended"},
+            {"id": "iapetus", "name": "Iapetus", "tier": "god"},
+            {"id": "astraeus", "name": "Astraeus", "tier": "god"},
+            {"id": "erebos", "name": "Erebos", "tier": "god"},
+            {"id": "phantasos", "name": "Phantasos", "tier": "god"},
+            {"id": "stilbon", "name": "Stilbon", "tier": "god"},
+        ],
     }
 
 
