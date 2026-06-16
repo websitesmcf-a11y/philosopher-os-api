@@ -152,6 +152,18 @@ import sys
 import time
 import uuid
 
+# Fix Windows CP1252 stdout so non-ASCII chars don't crash logging
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 try:
     import websockets
 except ImportError:
@@ -381,7 +393,7 @@ async def run_session(url: str, token: str) -> None:
     log.info("Connecting to %s", connect_url[:80] + "...")
 
     async with websockets.connect(connect_url, ping_interval=15, ping_timeout=8) as ws:
-        log.info("Connected ✓")
+        log.info("Connected OK")
 
         # Send initial status
         await ws.send(json.dumps({"type": "status", **status}))
