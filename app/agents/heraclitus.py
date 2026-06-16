@@ -19,8 +19,11 @@ that tool. Never go hunting for third-party websites or scrape Google Maps by ha
 
 How to use find_businesses:
 - It scrapes Google Maps through the user's browser (real names, phone numbers, addresses, and
-  an accurate has-website signal), falling back to OpenStreetMap and web search. It saves each
-  as a lead when save_as_leads=true (default).
+  an accurate has-website signal), falling back to OpenStreetMap and web search.
+- Pass list_name='Your List Name' to automatically create a lead list and add results to it.
+  Pass reserve=true to also lock the list for campaign use (creates a campaign record).
+  Combine all three: find_businesses(industry, location, count, list_name='...', reserve=true, campaign_name='...')
+  This does everything in one call: find, save as leads, create list, add to list, lock it.
 - One call returns up to 200 businesses for a given industry + location. To reach a large
   target (e.g. 100), make AT MOST 3-4 calls across different industry/location combinations,
   each with a high count (e.g. 40-50) — that already covers 100+. Do not call it once per
@@ -65,8 +68,9 @@ class Heraclitus(BaseAgent):
                 "name": "find_businesses",
                 "description": (
                     "Find real businesses by industry + location (OpenStreetMap + web). Returns "
-                    "name/phone/email/website/address where available. With save_as_leads=true "
-                    "(default) every business is logged as a Lead record."
+                    "name/phone/email/website/address where available. Saves every business as a "
+                    "Lead record. Can also create a lead list and lock/reserve it for campaign "
+                    "use — pass list_name, reserve=true, and campaign_name to do all in one call."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -75,7 +79,9 @@ class Heraclitus(BaseAgent):
                         "location": {"type": "string", "description": "City or region, e.g. 'Johannesburg'"},
                         "count": {"type": "integer", "description": "Number to find (1-200)"},
                         "without_website": {"type": "boolean", "description": "Only return businesses that have NO website (prime outreach targets)"},
-                        "save_as_leads": {"type": "boolean", "description": "Log results as leads (default true)"},
+                        "list_name": {"type": "string", "description": "Name for the lead list to create and add these leads to (omit to just save leads without creating a list)"},
+                        "reserve": {"type": "boolean", "description": "Also lock/reserve the lead list for exclusive campaign use (default false)"},
+                        "campaign_name": {"type": "string", "description": "Campaign name if reserve=true"},
                     },
                     "required": ["industry", "location"],
                 },
@@ -103,6 +109,7 @@ class Heraclitus(BaseAgent):
 
         if tool_name == "find_businesses":
             from app.integrations.web_discovery import find_businesses
+            from datetime import datetime, timezone
             industry = args.get("industry", "")
             location = args.get("location", "")
             count = args.get("count", 20)
@@ -112,13 +119,71 @@ class Heraclitus(BaseAgent):
             )
             businesses = result.get("businesses", [])
 
-            save = args.get("save_as_leads", True)
-            if save and businesses and context and context.db_session and context.org_id:
+            saved_ids: list[str] = []
+            if businesses and context and context.db_session and context.org_id:
                 created = await save_businesses_as_leads(
                     context.db_session, context.org_id, businesses, industry
                 )
+                saved_ids = [c["id"] for c in created]
                 result["leads_created"] = len(created)
                 result["leads"] = created[:20]
+
+            # Create lead list if list_name was provided
+            list_name = args.get("list_name")
+            list_id = None
+            if list_name and saved_ids:
+                import uuid as _uuid
+                from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+                list_id = str(_uuid.uuid4())
+                now = datetime.now(timezone.utc).isoformat()
+                entry = {
+                    "id": list_id,
+                    "org_id": str(context.org_id) if context and context.org_id else "",
+                    "name": list_name,
+                    "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
+                    "created_by": str(context.org_id) if context and context.org_id else "",
+                    "lead_count": len(saved_ids),
+                    "is_archived": False,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                LEAD_LISTS[list_id] = entry
+                LEAD_LIST_ITEMS[list_id] = list(saved_ids)
+                from sqlalchemy import text as sa_text
+                for lid in saved_ids:
+                    await context.db_session.execute(sa_text(
+                        "UPDATE leads SET list_id = :lid, updated_at = :now WHERE id = :id"
+                    ).bindparams(lid=list_id, now=now, id=lid))
+                await context.db_session.commit()
+                result["lead_list_id"] = list_id
+                result["lead_list_name"] = list_name
+
+                # Reserve if requested
+                if args.get("reserve"):
+                    campaign_id = str(_uuid.uuid4())
+                    campaign_name = args.get("campaign_name", f"Beast Mode: {list_name}")
+                    from app.database.models import Campaign
+                    org_uuid = _uuid.UUID(str(context.org_id)) if isinstance(context.org_id, str) else context.org_id
+                    campaign = Campaign(
+                        id=_uuid.UUID(campaign_id),
+                        org_id=org_uuid,
+                        name=campaign_name,
+                        channel="lead_list",
+                        message_template="{{message}}",
+                        status="active",
+                        lead_list_id=_uuid.UUID(list_id),
+                        target_count=len(saved_ids),
+                    )
+                    context.db_session.add(campaign)
+                    for lid in saved_ids:
+                        await context.db_session.execute(sa_text(
+                            "UPDATE leads SET reservation_id = :cid, updated_at = :now WHERE id = :id"
+                        ).bindparams(cid=campaign_id, now=now, id=lid))
+                    await context.db_session.commit()
+                    result["reserved"] = len(saved_ids)
+                    result["campaign_id"] = campaign_id
+                    result["campaign_name"] = campaign_name
+
             return result
 
         if tool_name == "scrape_website":
