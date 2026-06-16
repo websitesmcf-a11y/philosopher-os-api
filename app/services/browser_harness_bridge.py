@@ -26,7 +26,7 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 _COMMAND_TIMEOUT = 150.0  # max seconds to wait for a command result
-_RECONNECT_GRACE = 12.0  # seconds — absorb reconnection blips without flipping status
+_RECONNECT_GRACE = 60.0  # seconds — absorb reconnection blips without flipping status
 
 
 class BrowserHarnessBridge:

@@ -174,7 +174,7 @@ log = logging.getLogger("philosopher-harness")
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-HEARTBEAT_INTERVAL = 15  # seconds between pings
+HEARTBEAT_INTERVAL = 10  # seconds between pings
 RECONNECT_DELAYS = [0.2, 0.5, 1.0, 2.0, 4.0]  # retry backoff in seconds
 MAX_RECONNECT_DELAY = 8.0
 CHROME_PORT = 9222
@@ -392,7 +392,11 @@ async def run_session(url: str, token: str) -> None:
     connect_url = f"{ws_url}?token={token}"
     log.info("Connecting to %s", connect_url[:80] + "...")
 
-    async with websockets.connect(connect_url, ping_interval=15, ping_timeout=8) as ws:
+    # Don't use library-level ping_interval — Railway's proxy doesn't forward
+    # WebSocket PING frames, causing the library to disconnect after ~45s.
+    # Application-level heartbeats (below) keep the connection alive via real
+    # text frames that proxies handle correctly.
+    async with websockets.connect(connect_url) as ws:
         log.info("Connected OK")
 
         # Send initial status
