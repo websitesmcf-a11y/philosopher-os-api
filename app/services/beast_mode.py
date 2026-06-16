@@ -14,6 +14,7 @@ Level-based access:
                         have been provided.
 """
 
+import asyncio
 from typing import Any, Optional
 from datetime import datetime
 from enum import Enum
@@ -232,13 +233,21 @@ class BeastModeService:
 
                 # Create a real DB session for this mission step
                 async with async_session() as db:
-                    result = await council.process(
-                        user_input=plan.get("objective", ""),
-                        org_id=str(getattr(ctx, 'org_id', '')),
-                        db_session=db,
-                        agent=agent_id,
-                    )
-                    await db.commit()
+                    try:
+                        result = await asyncio.wait_for(
+                            council.process(
+                                user_input=plan.get("objective", ""),
+                                org_id=str(getattr(ctx, 'org_id', '')),
+                                db_session=db,
+                                agent=agent_id,
+                            ),
+                            timeout=90.0,
+                        )
+                        await db.commit()
+                    except asyncio.TimeoutError:
+                        result = {"reply": "Agent timed out after 90s — the objective may be too large. Break it into smaller missions (e.g. 'find 50 businesses' instead of 250)."}
+                        execution["errors"].append(f"Agent {agent_id} timed out (90s limit)")
+                        await db.rollback()
 
                 reply = result.get("reply", "") if result else ""
                 execution["steps"].append({
