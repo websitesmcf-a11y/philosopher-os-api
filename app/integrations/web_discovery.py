@@ -275,77 +275,95 @@ async def find_businesses(
                     "source": "web_search",
                 })
 
-    # 3b) Directory fallback for without_website mode — search SA business directories
-    #     via cloud browser. This is the only way to get phone numbers + names when OSM
-    #     has no website-filtered data.
+    # 3b) Directory fallback for without_website mode — search business directories
+    #     via DuckDuckGo (always available) + cloud browser (when available).
     if len(businesses) < count and without_website:
-        from app.integrations.cloud_browser import cloud_browser
-        if cloud_browser.available:
-            try:
-                needed = count - len(businesses)
-                # Search for directory listings with contact info
-                dir_queries = [
-                    f"{industry} in {location} phone contact",
-                    f"{industry} {location} directory phone number",
-                    f"{industry} {location} yellow pages",
-                ]
-                seen_names = {b["name"].lower() for b in businesses}
-                for dq in dir_queries:
+        try:
+            needed = count - len(businesses)
+            seen_names = {b["name"].lower() for b in businesses}
+            dir_queries = [
+                f"{industry} in {location} phone contact number",
+                f"{industry} {location} directory phone",
+                f"list of {industry} in {location} contact details",
+            ]
+            for dq in dir_queries:
+                if len(businesses) >= count:
+                    break
+                topup = await web_search(dq, count=15)
+                for r in topup.get("results", []):
+                    name = r["title"].split(" - ")[0].split(" | ")[0].strip()
+                    if not name or name.lower() in seen_names:
+                        continue
+                    seen_names.add(name.lower())
+                    snippet = r.get("snippet", "") or ""
+                    phone = ""
+                    m = re.search(r'(\+?\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4})', snippet)
+                    if m:
+                        phone = m.group(1).strip()
+                    businesses.append({
+                        "name": name[:200],
+                        "phone": phone,
+                        "email": "",
+                        "website": r.get("url", ""),
+                        "snippet": snippet[:300] if snippet else "",
+                        "source": "directory_search",
+                    })
                     if len(businesses) >= count:
                         break
-                    results = await cloud_browser.search_google(dq, count=15)
-                    for r in results:
-                        name = r["title"][:200]
-                        if name.lower() in seen_names:
-                            continue
-                        seen_names.add(name.lower())
-                        snippet = r.get("snippet", "")
-                        phone = ""
-                        if snippet:
-                            m = re.search(r'(\+?\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4})', snippet)
-                            if m:
-                                phone = m.group(1).strip()
-                        businesses.append({
-                            "name": name,
-                            "phone": phone,
-                            "email": "",
-                            "website": r["url"],
-                            "snippet": snippet[:300] if snippet else "",
-                            "source": "directory_search",
-                        })
-                        if len(businesses) >= count:
-                            break
 
-                    # If search results have directory URLs, scrape them for more listings
-                    if len(businesses) < count:
-                        dir_sites = [r["url"] for r in results if any(
-                            d in r["url"].lower()
-                            for d in ["yellowpages", "brabys", "sayellow", "cylex", "southafrican", "yellosa", "local"]
-                        )]
-                        for ds in dir_sites[:3]:
+            # Enhance with cloud browser directory scraping if available
+            from app.integrations.cloud_browser import cloud_browser
+            if cloud_browser.available and len(businesses) < count:
+                dir_google = await cloud_browser.search_google(
+                    f"{industry} in {location} yellow pages directory phone", count=10
+                )
+                for r in dir_google:
+                    name = r.get("title", "")[:200]
+                    if not name or name.lower() in seen_names:
+                        continue
+                    seen_names.add(name.lower())
+                    businesses.append({
+                        "name": name,
+                        "phone": "",
+                        "email": "",
+                        "website": r.get("url", ""),
+                        "snippet": r.get("snippet", "")[:300],
+                        "source": "directory_search",
+                    })
+                    if len(businesses) >= count:
+                        break
+
+                # Scrape directory pages for structured listings
+                dir_urls = [
+                    r["url"] for r in dir_google
+                    if any(d in r["url"].lower() for d in
+                           ["yellowpages", "brabys", "sayellow", "cylex", "yellosa"])
+                ]
+                for ds in dir_urls[:3]:
+                    if len(businesses) >= count:
+                        break
+                    try:
+                        listings = await cloud_browser.scrape_business_directory(ds)
+                        for dl in listings:
+                            dl_name = dl["name"]
+                            if dl_name.lower() in seen_names:
+                                continue
+                            seen_names.add(dl_name.lower())
+                            businesses.append({
+                                "name": dl_name[:200],
+                                "phone": dl.get("phone", ""),
+                                "email": "",
+                                "website": "",
+                                "source": f"directory",
+                            })
                             if len(businesses) >= count:
                                 break
-                            try:
-                                dir_listings = await cloud_browser.scrape_business_directory(ds)
-                                for dl in dir_listings:
-                                    name = dl["name"]
-                                    if name.lower() in seen_names:
-                                        continue
-                                    seen_names.add(name.lower())
-                                    businesses.append({
-                                        "name": name[:200],
-                                        "phone": dl.get("phone", ""),
-                                        "email": "",
-                                        "website": "",
-                                        "source": f"directory:{ds.split('/')[2] if '//' in ds else ds}",
-                                    })
-                                    if len(businesses) >= count:
-                                        break
-                            except Exception as e:
-                                logger.warning(f"Directory scrape failed for {ds}: {e}")
-                    source_used = source_used or "directory_search"
-            except Exception as e:
-                logger.warning(f"Directory fallback search failed: {e}")
+                    except Exception:
+                        continue
+
+            source_used = source_used or "directory_search"
+        except Exception as e:
+            logger.warning(f"Directory fallback search failed: {e}")
 
     businesses = businesses[:count]
     if businesses:
