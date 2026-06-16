@@ -92,12 +92,14 @@ async def harness_websocket(ws: WebSocket):
 
     Query param ``token`` is required — set in Integrations > Browser Harness.
     """
+    await ws.accept()
+
     token = ws.query_params.get("token", "")
     if not await _validate_token(token):
-        await ws.close(code=4001, reason="Invalid or missing token")
+        await ws.send_json({"type": "error", "message": "Invalid token. Generate one in Integrations > Browser Harness."})
+        await ws.close(code=4001)
         return
 
-    await ws.accept()
     try:
         await bridge.connect(ws)
         while True:
