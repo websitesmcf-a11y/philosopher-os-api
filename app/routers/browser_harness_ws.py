@@ -127,7 +127,7 @@ Connects to your Philosopher OS instance via WebSocket and proxies browser
 commands to your local Chrome through the browser-harness CLI.
 
 Usage:
-    pip install websockets      # or: websocket-client
+    pip install websockets      # or: python -m pip install websockets
     python philosopher-harness.py --url https://your-backend.com --token YOUR_TOKEN
 
 The token is generated in Philosopher OS → Integrations → Browser Harness.
@@ -229,7 +229,7 @@ async def main():
     try:
         import websockets
     except ImportError:
-        log.error("Missing dependency: pip install websockets")
+        log.error("Missing dependency: python -m pip install websockets")
         sys.exit(1)
 
     status = check_harness()
