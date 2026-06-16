@@ -221,6 +221,17 @@ class BeastModeService:
                 "will be simulated."
             )
 
+        # Level 3+ requires a connected browser harness
+        if mode in (BeastLevel.APPROVED, BeastLevel.FULL):
+            from app.services.browser_harness_bridge import bridge
+            if not bridge.connected:
+                execution["warnings"].append(
+                    "Browser harness is NOT connected — agents cannot search Google Maps, "
+                    "browse the web, or access logged-in sites. Install and run the harness "
+                    "agent on your computer (Integrations → Browser Harness). "
+                    "Agents will fall back to OpenStreetMap and web search (limited data)."
+                )
+
         available_tools = tools_for_level(mode)
 
         for step in plan.get("steps", []):

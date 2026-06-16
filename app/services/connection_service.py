@@ -52,6 +52,23 @@ PROVIDERS: dict[str, dict] = {
         "config": ["email_address", "smtp_host", "smtp_port"],
         "docs": "Use an app password, not your login password (Gmail: myaccount.google.com/apppasswords, Outlook: account.microsoft.com/security). SMTP host/port are detected automatically for common providers — only fill them in for custom domains.",
     },
+    "browser_harness": {
+        "label": "Browser Harness",
+        "description": "Connect your local Chrome so agents can scrape Google Maps, browse websites, and access logged-in sites — all through your own browser.",
+        "secrets": ["token"],
+        "config": [],
+        "docs": (
+            "Install the local agent on your computer, then run it with your token to connect.\n\n"
+            "1. Install the browser-harness CLI: pip install browser-harness\n"
+            "   (Or clone github.com/anthropics/hermes-agent and run: pip install -e hermes-agent/browser-harness)\n\n"
+            "2. Download and save the harness agent script:\n"
+            "   curl -o philosopher-harness.py <backend-url>/api/v1/browser-harness/agent-script\n\n"
+            "3. Run it with your token:\n"
+            "   python philosopher-harness.py --token YOUR_TOKEN --url <backend-url>\n\n"
+            "The agent will connect via WebSocket and stay running in your terminal. "
+            "Leave it open while using Beast Mode levels that need browser access (Level 3+)."
+        ),
+    },
     "google_calendar": {
         "label": "Google Calendar",
         "description": "Two-way calendar sync: read your Google Calendar and create, edit, and delete events.",
@@ -205,6 +222,12 @@ async def test_connection(provider: str, secrets: dict, config: dict) -> tuple[b
     if provider == "obsidian":
         return _test_obsidian_vault(config)
 
+    if provider == "browser_harness":
+        from app.services.browser_harness_bridge import bridge
+        if bridge.connected:
+            return True, "Browser harness connected"
+        return False, "Harness agent is not currently connected — install and run it on your computer"
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             if provider == "whatsapp":
@@ -311,6 +334,11 @@ class ConnectionService:
         out = []
         for name, meta in PROVIDERS.items():
             row = saved.get(name)
+            status = row.status if row else "disconnected"
+            # Live check for browser harness
+            if name == "browser_harness":
+                from app.services.browser_harness_bridge import bridge
+                status = "connected" if bridge.connected else status
             out.append({
                 "provider": name,
                 "label": meta["label"],
@@ -318,7 +346,7 @@ class ConnectionService:
                 "docs": meta["docs"],
                 "secret_fields": meta["secrets"],
                 "config_fields": meta["config"],
-                "status": row.status if row else "disconnected",
+                "status": status,
                 "config": row.config if row else {},
                 "last_checked_at": row.last_checked_at.isoformat() if row and row.last_checked_at else None,
                 "last_error": row.last_error if row else None,
@@ -332,6 +360,8 @@ class ConnectionService:
             return await self._save_email_inbox(secrets, config)
         if provider == "google_calendar":
             return await self._save_google_calendar(secrets, config)
+        if provider == "browser_harness":
+            return await self._save_browser_harness(secrets, config)
 
         ok, detail = await test_connection(provider, secrets, config)
 
@@ -353,6 +383,37 @@ class ConnectionService:
             _apply_to_settings(provider, secrets, config)
 
         return {"provider": provider, "status": row.status, "detail": detail}
+
+    async def _save_browser_harness(self, secrets: dict, config: dict) -> dict:
+        """Save a browser harness token. Auto-generate one if not provided."""
+        from app.services.browser_harness_bridge import bridge
+
+        token = (secrets.get("token") or "").strip()
+        if not token:
+            import uuid
+            token = str(uuid.uuid4())
+
+        result = await self.db.execute(select(Integration).where(Integration.provider == "browser_harness"))
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = Integration(provider="browser_harness")
+            self.db.add(row)
+
+        row.credentials_enc = encrypt_dict({"token": token})
+        row.config = {}
+        row.last_checked_at = datetime.utcnow()
+
+        if bridge.connected:
+            row.status = "connected"
+            row.last_error = None
+            detail = "Browser harness agent is connected"
+        else:
+            row.status = "disconnected"
+            row.last_error = "Agent not currently connected — install and run it on your computer"
+            detail = "Token saved. Run the agent on your computer to connect."
+
+        await self.db.flush()
+        return {"provider": "browser_harness", "status": row.status, "detail": detail, "token": token}
 
     async def _save_google_calendar(self, secrets: dict, config: dict) -> dict:
         """Store OAuth client credentials; 'connected' only after the OAuth
@@ -468,6 +529,10 @@ class ConnectionService:
         secrets = decrypt_dict(row.credentials_enc or "")
         if provider == "email":
             ok, detail = await self._retest_email_inboxes(secrets)
+        elif provider == "browser_harness":
+            from app.services.browser_harness_bridge import bridge
+            ok = bridge.connected
+            detail = "Browser harness is connected" if ok else "No harness agent connected"
         else:
             ok, detail = await test_connection(provider, secrets, row.config or {})
         row.status = "connected" if ok else "error"

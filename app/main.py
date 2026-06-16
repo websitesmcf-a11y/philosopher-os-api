@@ -39,6 +39,7 @@ from app.agents.autopilot import Autopilot
 from app.routers import autopilot as autopilot_router
 from app.routers import hermes as hermes_router
 from app.routers import beast_mode as beast_mode_router
+from app.routers import browser_harness_ws as browser_harness_router
 
 council = CouncilOrchestrator()
 
@@ -182,6 +183,7 @@ app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["Tasks"])
 app.include_router(automation.router, prefix="/api/v1/automation", tags=["Automation"])
 app.include_router(autopilot_router.router, prefix="/api/v1/autopilot", tags=["Autopilot"])
 app.include_router(connections.router, prefix="/api/v1/connections", tags=["Connections"])
+app.include_router(browser_harness_router.router)
 app.include_router(hermes_router.router, prefix="/api/v1/hermes", tags=["Hermes"])
 app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 app.include_router(cleanup.router, prefix="/api/v1/cleanup", tags=["Cleanup"])

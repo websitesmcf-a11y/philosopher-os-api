@@ -239,7 +239,7 @@ class BaseAgent(ABC):
                 "properties": {
                     "provider": {
                         "type": "string",
-                        "enum": ["whatsapp", "email", "google_calendar", "obsidian", "facebook", "instagram"],
+                        "enum": ["whatsapp", "email", "google_calendar", "obsidian", "facebook", "instagram", "browser_harness"],
                         "description": "The integration provider to check",
                     },
                 },
@@ -394,19 +394,22 @@ class BaseAgent(ABC):
             from app.integrations.web_discovery import browser_cli
             result = await browser_cli.run_script(args.get("script", ""))
             if result.get("status") in ("not_installed", "error"):
+                # Fall back to WebSocket bridge (remote harness)
+                from app.services.browser_harness_bridge import bridge
+                if bridge.connected:
+                    result = await bridge.run_script_safe(args.get("script", ""))
+                    return result
                 # Fall back to cloud browser (Playwright on Railway)
                 from app.integrations.cloud_browser import cloud_browser
                 if cloud_browser.available:
                     import re
                     script = args.get("script", "")
-                    # Try to extract a URL from the script
                     url_match = re.search(r'new_tab\("([^"]+)"\)|new_tab\(\'([^\']+)\'\)', script)
                     if url_match:
                         url = url_match.group(1) or url_match.group(2)
                         nav_result = await cloud_browser.navigate(url, timeout=30.0)
                         if nav_result.get("status") == "success":
                             return nav_result
-                    # Generic search attempt
                     return {"status": "success", "message": "Cloud browser is available. Use find_and_save_leads, web_search, or fetch_webpage instead of browser_task for business lookups.", "output": ""}
                 return result
 
@@ -450,6 +453,11 @@ class BaseAgent(ABC):
                         row = result.scalar_one_or_none()
                         if row and row.status == "connected":
                             return {"status": "connected", "detail": f"{provider} integration is connected"}
+                        if provider == "browser_harness":
+                            from app.services.browser_harness_bridge import bridge
+                            if bridge.connected:
+                                return {"status": "connected", "detail": "Browser harness is connected and available"}
+                            return {"status": "disconnected", "detail": "Browser harness is not connected — install and run the local agent from Integrations → Browser Harness"}
                         return {"status": "disconnected", "detail": f"{provider} is not connected. Go to the Integrations page to set it up."}
             except Exception as e:
                 return {"status": "error", "detail": f"Could not check {provider}: {str(e)}"}

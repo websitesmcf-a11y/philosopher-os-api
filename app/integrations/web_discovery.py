@@ -221,6 +221,20 @@ async def find_businesses(
         except Exception as e:
             logger.warning(f"Google Maps scrape failed for {industry!r}/{location!r}: {e}")
 
+    # 1a) Google Maps via the WebSocket bridge (remote harness).
+    if not businesses:
+        from app.services.browser_harness_bridge import bridge as harness_bridge
+        if harness_bridge.client_available:
+            try:
+                gmaps = await scrape_google_maps_bridge(
+                    harness_bridge, industry, location, count, without_website
+                )
+                if gmaps.get("status") == "success":
+                    businesses = gmaps["businesses"]
+                    source_used = "google_maps"
+            except Exception as e:
+                logger.warning(f"Bridge Google Maps scrape failed for {industry!r}/{location!r}: {e}")
+
     # 1b) Google Maps / web search via cloud browser (Playwright on Railway).
     if not businesses:
         from app.integrations.cloud_browser import cloud_browser
@@ -511,6 +525,56 @@ async def scrape_google_maps(industry: str, location: str, count: int = 40, with
             "name": name[:200],
             "phone": phone,
             "email": None,  # Google Maps does not expose email
+            "website": "has_website" if has_website else None,
+            "address": _guess_address(info),
+            "maps_url": maps_url,
+            "source": "google_maps",
+        })
+        if len(businesses) >= count:
+            break
+
+    if not businesses:
+        return {"status": "no_results", "businesses": []}
+    return {"status": "success", "businesses": businesses, "count": len(businesses)}
+
+
+async def scrape_google_maps_bridge(
+    bridge: Any, industry: str, location: str, count: int = 40, without_website: bool = False
+) -> dict:
+    """Scrape Google Maps via the WebSocket bridge (remote harness)."""
+    query = f"{industry} in {location}"
+    target = count * 3 if without_website else int(count * 1.3) + 2
+    script = _build_gmaps_script(query, min(target, 200))
+    result = await bridge.run_script_safe(script, timeout=150.0)
+    if result.get("status") != "success":
+        return {"status": result.get("status", "error"), "businesses": [], "detail": result.get("message") or result.get("error")}
+
+    out = result.get("output", "")
+    raw = _between(out, "RESULTS_JSON_START", "RESULTS_JSON_END")
+    if not raw or raw == "None":
+        return {"status": "no_results", "businesses": []}
+
+    businesses = []
+    seen: set[str] = set()
+    for rec in raw.split(_RECORD):
+        fields = rec.split(_FIELD)
+        if len(fields) < 4:
+            continue
+        name = fields[0].strip()
+        has_website = fields[1].strip() == "1"
+        maps_url = fields[2].strip()
+        info = fields[3]
+        if not name or name.lower() in seen:
+            continue
+        if without_website and has_website:
+            continue
+        seen.add(name.lower())
+        phone_match = _PHONE_RE.search(info)
+        phone = phone_match.group(0).strip() if phone_match else None
+        businesses.append({
+            "name": name[:200],
+            "phone": phone,
+            "email": None,
             "website": "has_website" if has_website else None,
             "address": _guess_address(info),
             "maps_url": maps_url,
