@@ -25,11 +25,11 @@ class Settings(BaseSettings):
     clerk_jwks_url: Optional[str] = "https://api.clerk.com/v1/jwks"
 
     # Redis
-    redis_url: str = "redis://localhost:6379"
+    redis_url: str = ""
 
     # Celery
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
+    celery_broker_url: str = ""
+    celery_result_backend: str = ""
     worker_concurrency: int = 4
 
     # LLM Providers
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # WhatsApp
     whatsapp_session_path: str = "./.wwebjs_auth"
-    wa_bot_url: str = "http://localhost:8088"
+    wa_bot_url: str = ""
     whatsapp_webhook_secret: Optional[str] = None
 
     # Database
