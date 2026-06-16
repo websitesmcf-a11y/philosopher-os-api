@@ -279,12 +279,13 @@ async def find_businesses(
     #     via DuckDuckGo (always available) + cloud browser (when available).
     if len(businesses) < count and without_website:
         try:
-            needed = count - len(businesses)
             seen_names = {b["name"].lower() for b in businesses}
+            needed = count - len(businesses)
             dir_queries = [
                 f"{industry} in {location} phone contact number",
                 f"{industry} {location} directory phone",
                 f"list of {industry} in {location} contact details",
+                f"{industry} {location} yellow pages phone",
             ]
             for dq in dir_queries:
                 if len(businesses) >= count:
@@ -297,9 +298,9 @@ async def find_businesses(
                     seen_names.add(name.lower())
                     snippet = r.get("snippet", "") or ""
                     phone = ""
-                    m = re.search(r'(\+?\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4})', snippet)
+                    m = re.search(_PHONE_RE, snippet)
                     if m:
-                        phone = m.group(1).strip()
+                        phone = m.group(0).strip()
                     businesses.append({
                         "name": name[:200],
                         "phone": phone,
@@ -310,6 +311,24 @@ async def find_businesses(
                     })
                     if len(businesses) >= count:
                         break
+
+            # Phone enrichment: scrape top result URLs to extract phone numbers for
+            # leads that were found from snippets (which often omit the phone).
+            phone_count = sum(1 for b in businesses if b.get("phone"))
+            if phone_count < (needed // 3) and businesses:
+                url_targets = [b for b in businesses if not b.get("phone") and b.get("website")]
+                for target in url_targets[:5]:
+                    try:
+                        page = await asyncio.wait_for(scrape_url(target["website"]), timeout=8.0)
+                        text = page.get("content", "")
+                        m = re.search(_PHONE_RE, text)
+                        if m:
+                            target["phone"] = m.group(0).strip()
+                            phone_count += 1
+                            if phone_count >= (needed // 3):
+                                break
+                    except Exception:
+                        continue
 
             # Enhance with cloud browser directory scraping if available
             from app.integrations.cloud_browser import cloud_browser
@@ -354,7 +373,7 @@ async def find_businesses(
                                 "phone": dl.get("phone", ""),
                                 "email": "",
                                 "website": "",
-                                "source": f"directory",
+                                "source": "directory",
                             })
                             if len(businesses) >= count:
                                 break
