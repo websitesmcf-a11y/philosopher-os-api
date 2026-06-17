@@ -59,8 +59,9 @@ PROVIDERS: dict[str, dict] = {
         "config": [],
         "docs": (
             "Install the local agent on your computer, then run it with your token to connect.\n\n"
-            "1. Install the browser-harness CLI: pip install browser-harness\n"
-            "   (Or clone github.com/anthropics/hermes-agent and run: pip install -e hermes-agent/browser-harness)\n\n"
+            "1. Install the browser-harness CLI:\n"
+            "   git clone https://github.com/NousResearch/hermes-agent.git\n"
+            "   cd hermes-agent && python -m pip install -e ./browser-harness\n\n"
             "2. Download and save the harness agent script:\n"
             "   curl -o philosopher-harness.py <backend-url>/api/v1/browser-harness/agent-script\n\n"
             "3. Run it with your token:\n"

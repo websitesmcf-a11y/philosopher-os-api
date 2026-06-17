@@ -25,7 +25,7 @@ from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
-_COMMAND_TIMEOUT = 150.0  # max seconds to wait for a command result
+_COMMAND_TIMEOUT = 300.0  # max seconds to wait for a command result (Google Maps scraping can take 2-3 min)
 _RECONNECT_GRACE = 60.0  # seconds — absorb reconnection blips without flipping status
 
 
@@ -95,7 +95,14 @@ class BrowserHarnessBridge:
             logger.info("Browser harness client connected")
 
     async def disconnect(self) -> None:
-        """Called on WebSocket drop — enters grace period instead of flipping immediately."""
+        """Called on WebSocket drop — enters grace period instead of flipping immediately.
+
+        In-flight commands (pending futures) are NOT failed here — they survive
+        the WS drop. When the agent reconnects and flushes completed results, the
+        bridge's ``handle_message`` will resolve the original future. The timeout
+        in ``run_script`` (``asyncio.wait_for``) still catches commands that are
+        truly lost (e.g. the agent machine goes offline).
+        """
         async with self._lock:
             if not self._connected:
                 return
@@ -104,11 +111,9 @@ class BrowserHarnessBridge:
             self._ws = None
             self._client_available = False
             # Keep _client_info so the status endpoint shows "last known" state
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(RuntimeError("Harness disconnected"))
-            self._pending.clear()
-            logger.info("Browser harness disconnected — grace period started (%.0fs)", _RECONNECT_GRACE)
+            # Pending futures survive — the agent may reconnect and flush results.
+            logger.info("Browser harness disconnected — grace period started (%.0fs), %d pending commands survive",
+                        _RECONNECT_GRACE, len(self._pending))
 
     async def handle_message(self, raw: str) -> None:
         """Process an incoming WebSocket message from the harness client."""

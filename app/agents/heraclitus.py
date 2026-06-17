@@ -24,6 +24,8 @@ How to use find_businesses:
   Pass reserve=true to also lock the list for campaign use (creates a campaign record).
   Combine all three: find_businesses(industry, location, count, list_name='...', reserve=true, campaign_name='...')
   This does everything in one call: find, save as leads, create list, add to list, lock it.
+  IMPORTANT: Use the SAME list_name across all calls for a mission — the system
+  auto-detects the name and appends leads to the existing list instead of creating duplicates.
 - One call returns up to 200 businesses for a given industry + location. To reach a large
   target (e.g. 100), make AT MOST 3-4 calls across different industry/location combinations,
   each with a high count (e.g. 40-50) — that already covers 100+. Do not call it once per
@@ -134,26 +136,46 @@ class Heraclitus(BaseAgent):
             if list_name and saved_ids:
                 import uuid as _uuid
                 from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
-                list_id = str(_uuid.uuid4())
-                now = datetime.now(timezone.utc).isoformat()
-                entry = {
-                    "id": list_id,
-                    "org_id": str(context.org_id) if context and context.org_id else "",
-                    "name": list_name,
-                    "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
-                    "created_by": str(context.org_id) if context and context.org_id else "",
-                    "lead_count": len(saved_ids),
-                    "is_archived": False,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                LEAD_LISTS[list_id] = entry
-                LEAD_LIST_ITEMS[list_id] = list(saved_ids)
+
+                # Check if a list with this name already exists for this org
+                org_id_str = str(context.org_id) if context and context.org_id else ""
+                for existing_id, existing in list(LEAD_LISTS.items()):
+                    if existing.get("name") == list_name and existing.get("org_id") == org_id_str:
+                        list_id = existing_id
+                        break
+
+                if list_id:
+                    # Add to existing list
+                    existing_items = set(LEAD_LIST_ITEMS.get(list_id, []))
+                    for lid in saved_ids:
+                        if lid not in existing_items:
+                            existing_items.add(lid)
+                    LEAD_LIST_ITEMS[list_id] = list(existing_items)
+                    LEAD_LISTS[list_id]["lead_count"] = len(existing_items)
+                    LEAD_LISTS[list_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                else:
+                    # Create new list
+                    list_id = str(_uuid.uuid4())
+                    now = datetime.now(timezone.utc).isoformat()
+                    entry = {
+                        "id": list_id,
+                        "org_id": org_id_str,
+                        "name": list_name,
+                        "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
+                        "created_by": org_id_str,
+                        "lead_count": len(saved_ids),
+                        "is_archived": False,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                    LEAD_LISTS[list_id] = entry
+                    LEAD_LIST_ITEMS[list_id] = list(saved_ids)
+
                 from sqlalchemy import text as sa_text
                 for lid in saved_ids:
                     await context.db_session.execute(sa_text(
                         "UPDATE leads SET list_id = :lid, updated_at = :now WHERE id = :id"
-                    ).bindparams(lid=list_id, now=now, id=lid))
+                    ).bindparams(lid=list_id, now=datetime.now(timezone.utc).isoformat(), id=lid))
                 await context.db_session.commit()
                 result["lead_list_id"] = list_id
                 result["lead_list_name"] = list_name

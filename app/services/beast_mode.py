@@ -252,12 +252,12 @@ class BeastModeService:
                                 db_session=db,
                                 agent=agent_id,
                             ),
-                            timeout=180.0,
+                            timeout=1800.0,
                         )
                         await db.commit()
                     except asyncio.TimeoutError:
-                        result = {"reply": "Agent timed out after 180s — the objective may be too large. Break it into smaller missions (e.g. find 10 businesses per city instead of 50)."}
-                        execution["errors"].append(f"Agent {agent_id} timed out (180s limit)")
+                        result = {"reply": "Agent timed out after 1800s — the objective may be too large. Break it into smaller missions (e.g. find 10 businesses per city instead of 50)."}
+                        execution["errors"].append(f"Agent {agent_id} timed out (1800s limit)")
                         await db.rollback()
 
                 reply = result.get("reply", "") if result else ""

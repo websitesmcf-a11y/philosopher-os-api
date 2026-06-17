@@ -322,7 +322,7 @@ class BaseAgent(ABC):
                     "location": {"type": "string", "description": "City or region, e.g. 'Johannesburg', 'Cape Town'"},
                     "count": {"type": "integer", "description": "Number of businesses to find (1-300, default 20)"},
                     "without_website": {"type": "boolean", "description": "Only return businesses without a website (default false)"},
-                    "list_name": {"type": "string", "description": "Optional name for the lead list (auto-generated if omitted)"},
+                    "list_name": {"type": "string", "description": "Name for the lead list. Use the SAME name across calls to consolidate all leads into one list (auto-generated if omitted)"},
                     "reserve": {"type": "boolean", "description": "Also lock/reserve the lead list for exclusive use (default false)"},
                     "campaign_name": {"type": "string", "description": "Campaign name if reserve=true"},
                 },
@@ -626,23 +626,43 @@ class BaseAgent(ABC):
             else:
                 saved_ids = []
 
-            # Step 3: Create a lead list
+            # Step 3: Create a lead list (or append to existing one with same name)
             from app.routers.lead_lists import LEAD_LISTS as _LL, LEAD_LIST_ITEMS as _LLI
-            list_id = str(_uuid.uuid4())
+            org_id_str = context.org_id if context else ""
             now = datetime.now(timezone.utc).isoformat()
-            list_entry = {
-                "id": list_id,
-                "org_id": context.org_id if context else "",
-                "name": list_name,
-                "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
-                "created_by": getattr(context, 'org_id', ''),
-                "lead_count": len(saved_ids or businesses),
-                "is_archived": False,
-                "created_at": now,
-                "updated_at": now,
-            }
-            _LL[list_id] = list_entry
-            _LLI[list_id] = list(saved_ids) if saved_ids else []
+
+            # Check if a list with this name already exists for this org
+            list_id = None
+            for existing_id, existing in list(_LL.items()):
+                if existing.get("name") == list_name and existing.get("org_id") == org_id_str:
+                    list_id = existing_id
+                    break
+
+            if list_id:
+                # Append to existing list
+                existing_items = set(_LLI.get(list_id, []))
+                for lid in (saved_ids or []):
+                    if lid not in existing_items:
+                        existing_items.add(lid)
+                _LLI[list_id] = list(existing_items)
+                _LL[list_id]["lead_count"] = len(existing_items)
+                _LL[list_id]["updated_at"] = now
+            else:
+                # Create new list
+                list_id = str(_uuid.uuid4())
+                list_entry = {
+                    "id": list_id,
+                    "org_id": org_id_str,
+                    "name": list_name,
+                    "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
+                    "created_by": org_id_str,
+                    "lead_count": len(saved_ids or businesses),
+                    "is_archived": False,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                _LL[list_id] = list_entry
+                _LLI[list_id] = list(saved_ids) if saved_ids else []
 
             # Step 4: Update list_id on lead rows
             if context and context.db_session and saved_ids:

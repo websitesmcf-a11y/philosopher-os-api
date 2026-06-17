@@ -95,10 +95,14 @@ async def harness_websocket(ws: WebSocket):
     await ws.accept()
 
     token = ws.query_params.get("token", "")
-    if not await _validate_token(token):
-        await ws.send_json({"type": "error", "message": "Invalid token. Generate one in Integrations > Browser Harness."})
-        await ws.close(code=4001)
-        return
+    # Validate against the database — without this, ANY non-empty token works,
+    # allowing rogue agents from other machines to disrupt the connection.
+    from app.database.session import async_session
+    async with async_session() as db:
+        if not await _validate_token(token, db=db):
+            await ws.send_json({"type": "error", "message": "Invalid token. Generate one in Integrations > Browser Harness."})
+            await ws.close(code=4001)
+            return
 
     try:
         await bridge.connect(ws)
@@ -353,7 +357,7 @@ async def run_command(cmd_id: str, script: str) -> dict:
             proc = subprocess.run(
                 [harness],
                 input=script.encode("utf-8"),
-                capture_output=True, timeout=150,
+                capture_output=True, timeout=300, (Fix Beast Mode Level 4: raise timeout, dedup lead lists, bridge WS survival, phone enrichment)
             )
             stdout = proc.stdout.decode("utf-8", errors="replace").strip()
             stderr = proc.stderr.decode("utf-8", errors="replace").strip()
@@ -364,7 +368,7 @@ async def run_command(cmd_id: str, script: str) -> dict:
                     "output": stdout[:400_000], "error": stderr[:4000]}
         except subprocess.TimeoutExpired:
             return {"type": "result", "id": cmd_id, "status": "timeout",
-                    "output": "", "error": "Script timed out after 150s"}
+                    "output": "", "error": "Script timed out after 300s"} (Fix Beast Mode Level 4: raise timeout, dedup lead lists, bridge WS survival, phone enrichment)
         except Exception as e:
             return {"type": "result", "id": cmd_id, "status": "error",
                     "output": "", "error": str(e)}
@@ -375,74 +379,113 @@ async def run_command(cmd_id: str, script: str) -> dict:
 # ── WebSocket session ──────────────────────────────────────────────────
 
 async def run_session(url: str, token: str) -> None:
-    """Run one WebSocket session with heartbeating, status reporting, and Chrome health."""
-    status = check_harness()
-    # Ensure Chrome is running with CDP
-    if not status["cdp"]:
+    """Run one WebSocket session with heartbeating, status reporting, and Chrome health.
+
+    Commands are decoupled from the WebSocket connection: if the proxy drops
+    the WS (Railway's ~47s hard timeout), in-flight commands continue running
+    in the background. When the WS reconnects, any completed results are
+    flushed to the backend immediately.
+    """
+    # Pre-check Chrome so the first status report is accurate
+    initial_status = check_harness()
+    if not initial_status["cdp"]:
         log.info("Chrome CDP not reachable — attempting to auto-launch...")
         if ensure_chrome():
-            status = check_harness()
-            log.info("Chrome CDP: %s", "reachable" if status["cdp"] else "still not reachable")
+            initial_status = check_harness()
+            log.info("Chrome CDP: %s", "reachable" if initial_status["cdp"] else "still not reachable") (Fix Beast Mode Level 4: raise timeout, dedup lead lists, bridge WS survival, phone enrichment)
         else:
             log.warning("Could not auto-launch Chrome. Is it installed?")
 
     ws_url = url.rstrip("/").replace("http://", "ws://").replace("https://", "wss://")
     ws_url += "/api/v1/browser-harness/ws"
 
+    # Commands that are still running (task) or have completed (result stored).
+    # Keyed by cmd_id. Survives WS disconnects.
+    pending: dict[str, asyncio.Task[dict]] = {}
+
     connect_url = f"{ws_url}?token={token}"
-    log.info("Connecting to %s", connect_url[:80] + "...")
 
-    # Don't use library-level ping_interval — Railway's proxy doesn't forward
-    # WebSocket PING frames, causing the library to disconnect after ~45s.
-    # Application-level heartbeats (below) keep the connection alive via real
-    # text frames that proxies handle correctly.
-    async with websockets.connect(connect_url) as ws:
-        log.info("Connected OK")
+    # Reconnect loop — each iteration is one WS session
+    while True:
+        log.info("Connecting to %s", connect_url[:80] + "...")
 
-        # Send initial status
-        await ws.send(json.dumps({"type": "status", **status}))
+        try:
+            async with websockets.connect(connect_url, ping_interval=None) as ws:
+                log.info("Connected OK")
 
-        async def heartbeat():
-            while True:
-                await asyncio.sleep(HEARTBEAT_INTERVAL)
-                try:
-                    await ws.send(json.dumps({"type": "ping"}))
-                except Exception:
-                    break
+                # Flush any completed-but-unsent results from a prior session
+                flush_count = 0
+                for cmd_id in list(pending.keys()):
+                    task = pending[cmd_id]
+                    if task.done():
+                        try:
+                            result = task.result()
+                            await ws.send(json.dumps(result))
+                            log.info("Flushed result for %s: %s", cmd_id, result.get("status"))
+                        except Exception as e:
+                            log.warning("Pending cmd %s failed: %s", cmd_id, e)
+                        del pending[cmd_id]
+                        flush_count += 1
+                if flush_count:
+                    log.info("Flushed %d completed result(s) from prior session", flush_count)
 
-        async def status_reporter():
-            while True:
-                await asyncio.sleep(45)
-                try:
-                    s = check_harness()
-                    # If Chrome died, try reviving
-                    if not s["cdp"]:
-                        ensure_chrome()
-                        s = check_harness()
-                    await ws.send(json.dumps({"type": "status", **s}))
-                except Exception:
-                    break
+                # Send current status
+                s = check_harness()
+                await ws.send(json.dumps({"type": "status", **s}))
 
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(heartbeat())
-            tg.create_task(status_reporter())
+                async def heartbeat():
+                    while True:
+                        await asyncio.sleep(HEARTBEAT_INTERVAL)
+                        try:
+                            await ws.send(json.dumps({"type": "ping"}))
+                        except Exception:
+                            break
 
-            async for raw in ws:
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
+                async def status_reporter():
+                    while True:
+                        await asyncio.sleep(45)
+                        try:
+                            s = check_harness()
+                            if not s["cdp"]:
+                                ensure_chrome()
+                                s = check_harness()
+                            await ws.send(json.dumps({"type": "status", **s}))
+                        except Exception:
+                            break
 
-                if msg.get("type") == "run_script":
-                    cmd_id = msg.get("id", str(uuid.uuid4()))
-                    script = msg.get("script", "")
-                    log.info("Running script (%s chars)...", len(script))
-                    result = await run_command(cmd_id, script)
-                    await ws.send(json.dumps(result))
-                    log.info("Script complete: %s", result.get("status"))
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(heartbeat())
+                    tg.create_task(status_reporter())
 
-                elif msg.get("type") == "pong":
-                    pass  # heartbeat reply
+                    async for raw in ws:
+                        try:
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if msg.get("type") == "run_script":
+                            cmd_id = msg.get("id", str(uuid.uuid4()))
+                            script = msg.get("script", "")
+                            log.info("Running script (%s chars)...", len(script))
+
+                            # Spawn as a background task, NOT inside the TaskGroup.
+                            # This way command execution survives WS disconnects.
+                            task = asyncio.create_task(run_command(cmd_id, script))
+                            pending[cmd_id] = task
+
+                        elif msg.get("type") == "pong":
+                            pass  # heartbeat reply
+
+        except asyncio.CancelledError:
+            # Cancel any in-flight commands before exiting
+            for cmd_id, task in pending.items():
+                task.cancel()
+            raise
+        except Exception as e:
+            log.warning("Session ended: %s", e)
+            # Brief pause so we don't tight-loop on a down server
+            await asyncio.sleep(1)
+            # Pending commands keep running — they'll flush on next connect (Fix Beast Mode Level 4: raise timeout, dedup lead lists, bridge WS survival, phone enrichment)
 
 
 # ── Main ───────────────────────────────────────────────────────────────
@@ -499,21 +542,13 @@ async def main():
     if args.daemon:
         log.info("Mode: background daemon")
 
-    # Main reconnect loop — instant first retry, then backoff
-    delay_idx = 0
-    while True:
-        try:
-            await run_session(args.url, args.token)
-            # clean disconnect (unlikely) — reset backoff
-            delay_idx = 0
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            log.warning("Disconnected: %s", e)
-            delay = RECONNECT_DELAYS[delay_idx] if delay_idx < len(RECONNECT_DELAYS) else MAX_RECONNECT_DELAY
-            delay_idx = min(delay_idx + 1, len(RECONNECT_DELAYS))
-            log.info("Reconnecting in %.1fs...", delay)
-            await asyncio.sleep(delay)
+    # run_session has its own infinite reconnect loop and decouples
+    # command execution from WS connection drops — nothing else to do.
+    try:
+        await run_session(args.url, args.token)
+    except asyncio.CancelledError:
+        log.info("Agent cancelled")
+        raise (Fix Beast Mode Level 4: raise timeout, dedup lead lists, bridge WS survival, phone enrichment)
 
 
 if __name__ == "__main__":

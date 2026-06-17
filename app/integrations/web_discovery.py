@@ -399,6 +399,33 @@ async def find_businesses(
             logger.warning(f"Directory fallback search failed: {e}")
 
     businesses = businesses[:count]
+
+    # Phone enrichment: when Google Maps wasn't the source, scrape business
+    # websites to fill in missing phone numbers.
+    if source_used != "google_maps":
+        phone_count = sum(1 for b in businesses if b.get("phone"))
+        if phone_count < max(3, count // 4):
+            url_targets = [
+                b for b in businesses
+                if not b.get("phone") and b.get("website")
+                and not str(b.get("website", "")).startswith("has_website")
+            ]
+            max_scrape = min(8, len(url_targets))
+            scraped = 0
+            for target in url_targets[:max_scrape]:
+                try:
+                    page = await asyncio.wait_for(scrape_url(target["website"]), timeout=10.0)
+                    text = page.get("content", "")
+                    m = re.search(_PHONE_RE, text)
+                    if m:
+                        target["phone"] = m.group(0).strip()
+                        scraped += 1
+                except Exception:
+                    continue
+            if scraped:
+                logger.info("Phone enrichment: scraped %d/%d sites, found %d phones",
+                            max_scrape, len(url_targets), scraped)
+
     if businesses:
         return {"status": "success", "businesses": businesses, "count": len(businesses), "source": source_used}
     hint = (
@@ -545,7 +572,7 @@ async def scrape_google_maps_bridge(
     query = f"{industry} in {location}"
     target = count * 3 if without_website else int(count * 1.3) + 2
     script = _build_gmaps_script(query, min(target, 200))
-    result = await bridge.run_script_safe(script, timeout=150.0)
+    result = await bridge.run_script_safe(script, timeout=300.0)
     if result.get("status") != "success":
         return {"status": result.get("status", "error"), "businesses": [], "detail": result.get("message") or result.get("error")}
 
