@@ -18,6 +18,10 @@ class ExecuteMissionRequest(BaseModel):
     mode: str = "approved"
 
 
+# Background mission execution — prevents Railway proxy timeout on long missions.
+_BACKGROUND_MISSIONS: dict[str, asyncio.Task] = {}
+
+
 @router.get("/status")
 async def get_beast_mode_status():
     """Check Beast Mode availability and level info."""
@@ -79,7 +83,13 @@ async def plan_mission(req: PlanMissionRequest):
 
 @router.post("/execute")
 async def execute_mission(req: ExecuteMissionRequest):
-    """Execute an approved Beast Mode mission."""
+    """Start a Beast Mode mission in the background and return immediately.
+
+    The frontend polls ``GET /api/v1/beast-mode/{mission_id}`` for incremental
+    progress (status, errors, completed steps). The backend runs agents in a
+    background ``asyncio.Task`` so Railway's HTTP proxy timeout (~60s) doesn't
+    kill long-running missions.
+    """
     from app.services.beast_mode import beast_mode as bm, BeastLevel
 
     level_map = {l.value: l for l in BeastLevel}
@@ -93,8 +103,8 @@ async def execute_mission(req: ExecuteMissionRequest):
         org_id = "00000000-0000-0000-0000-000000000001"  # Default dev org
 
     plan = await bm.plan_mission(MissionCtx(), req.objective, req.agents, level)
-    execution = await bm.execute_mission(MissionCtx(), plan)
-    return execution
+    result = await bm.start_mission_async(MissionCtx(), plan)
+    return result
 
 
 @router.post("/{mission_id}/{action}")

@@ -86,6 +86,7 @@ class BeastModeService:
 
     def __init__(self):
         self.active_missions: dict = {}
+        self._background_tasks: dict[str, asyncio.Task] = {}
         self.ruflow_available = False
         self.banking_configured = False
 
@@ -194,8 +195,13 @@ class BeastModeService:
         plan["safe_to_execute"] = len(plan["missing_integrations"]) == 0 and mode != BeastLevel.DRY_RUN
         return plan
 
-    async def execute_mission(self, ctx: Any, plan: dict) -> dict:
-        """Execute a planned Beast Mode mission with real agent execution."""
+    async def start_mission_async(self, ctx: Any, plan: dict) -> dict:
+        """Start mission execution in the background and return immediately.
+
+        The calling HTTP handler returns ``{mission_id, status: "running"}`` right
+        away. The frontend polls ``GET /api/v1/beast-mode/{mission_id}`` to track
+        progress as each agent completes.
+        """
         council = self._get_council()
         from app.database.session import async_session
 
@@ -204,7 +210,9 @@ class BeastModeService:
         mode = level_map.get(mode_value, BeastLevel.ASSISTED)
 
         mission_id = f"beast_{int(datetime.utcnow().timestamp())}"
-        execution = {
+
+        # Publish the initial running state immediately
+        self.active_missions[mission_id] = {
             "mission_id": mission_id,
             "status": "running",
             "level": mode.value,
@@ -214,6 +222,49 @@ class BeastModeService:
             "errors": [],
             "warnings": [],
         }
+
+        async def _run():
+            """Inner coroutine that actually runs agents, updating the mission dict."""
+            try:
+                await self.execute_mission(ctx, plan, mission_id=mission_id)
+            except asyncio.CancelledError:
+                self.active_missions[mission_id]["status"] = "cancelled"
+            except Exception as e:
+                self.active_missions[mission_id]["status"] = "failed"
+                self.active_missions[mission_id]["errors"].append(str(e))
+
+        self._background_tasks[mission_id] = asyncio.create_task(_run())
+        return {"mission_id": mission_id, "status": "running"}
+
+    async def execute_mission(self, ctx: Any, plan: dict, mission_id: str = "") -> dict:
+        """Execute a planned Beast Mode mission with real agent execution.
+
+        When ``mission_id`` is not provided (direct HTTP call), returns the full
+        execution result. When it IS provided (background task), writes incremental
+        progress to ``self.active_missions[mission_id]`` so the frontend can poll.
+        """
+        council = self._get_council()
+        from app.database.session import async_session
+
+        mode_value = plan.get("mode", "assisted")
+        level_map = {l.value: l for l in BeastLevel}
+        mode = level_map.get(mode_value, BeastLevel.ASSISTED)
+
+        if not mission_id:
+            mission_id = f"beast_{int(datetime.utcnow().timestamp())}"
+
+        # Use the existing record if called from background, else create fresh
+        execution = self.active_missions.get(mission_id, {
+            "mission_id": mission_id,
+            "status": "running",
+            "level": mode.value,
+            "started_at": datetime.utcnow().isoformat(),
+            "objective": plan.get("objective", ""),
+            "steps": [],
+            "errors": [],
+            "warnings": [],
+        })
+        self.active_missions[mission_id] = execution
 
         if mode == BeastLevel.FULL and not self._check_banking():
             execution["warnings"].append(
@@ -269,6 +320,9 @@ class BeastModeService:
             except Exception as e:
                 execution["errors"].append(f"Agent {agent_id} failed: {str(e)}")
                 execution["steps"].append({"agent": agent_id, "status": "failed", "error": str(e)})
+
+            # Write incremental progress so the frontend can poll
+            self.active_missions[mission_id] = execution
 
         execution["status"] = "completed" if not execution["errors"] else "completed_with_errors"
         execution["completed_at"] = datetime.utcnow().isoformat()
