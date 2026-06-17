@@ -243,7 +243,8 @@ class CampaignService:
             query = query.where(Lead.org_id == uuid.UUID(self.org_id))
         if status_filter:
             query = query.where(CampaignLead.status == status_filter)
-        query = query.order_by(CampaignLead.status, CampaignLead.sent_at.desc().nullslast())        result = await self.db.execute(query)
+        query = query.order_by(CampaignLead.status, CampaignLead.sent_at.desc().nullslast())
+        result = await self.db.execute(query)
         rows = result.all()
         return {
             "items": [
