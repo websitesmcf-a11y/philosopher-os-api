@@ -23,18 +23,41 @@ from app.database.session import async_session
 logger = logging.getLogger(__name__)
 
 
-def _personalize_fallback(template: str, lead: Lead) -> str:
-    """Plain placeholder substitution when the LLM is unavailable."""
+def _personalize_fallback(template: str, lead: Lead, sender_name: str = "") -> str:
+    """Plain placeholder substitution when the LLM is unavailable.
+
+    Supports both ``{name}`` and ``[Name]`` style placeholders so users
+    can write templates either way. Also handles:
+      - ``[Business Name]`` / ``{company}``  → lead.company
+      - ``[Your Name]`` / ``{sender}``       → the campaign sender's name
+    """
+    name = lead.name or "there"
+    company = lead.company or "your business"
+    industry = lead.industry or "your industry"
+    sender = sender_name or "the team"
     return (
-        template.replace("{name}", lead.name or "there")
-        .replace("{company}", lead.company or "your business")
-        .replace("{industry}", lead.industry or "your industry")
+        template
+        # Curly-brace style
+        .replace("{name}", name)
+        .replace("{company}", company)
+        .replace("{industry}", industry)
+        .replace("{sender}", sender)
+        # Bracket style (case-insensitive via lower())
+        .replace("[Name]", name)
+        .replace("[name]", name)
+        .replace("[Business Name]", company)
+        .replace("[business name]", company)
+        .replace("[Business]", company)
+        .replace("[Company]", company)
+        .replace("[Your Name]", sender)
+        .replace("[your name]", sender)
+        .replace("[Industry]", industry)
     )
 
 
-async def personalize_message(template: str, lead: Lead) -> str:
+async def personalize_message(template: str, lead: Lead, sender_name: str = "") -> str:
     """Personalize a campaign template for one lead via the LLM, with a safe fallback."""
-    base = _personalize_fallback(template, lead)
+    base = _personalize_fallback(template, lead, sender_name)
     try:
         from app.llm.client import llm
         response = await llm.generate(
@@ -49,6 +72,7 @@ async def personalize_message(template: str, lead: Lead) -> str:
                     f"Recipient: {lead.name or 'unknown'}"
                     f"{f' at {lead.company}' if lead.company and lead.company != lead.name else ''}"
                     f"{f' ({lead.industry})' if lead.industry else ''}\n"
+                    f"Sender name: {sender_name or 'the team'}\n"
                     f"Message template:\n{base}"
                 ),
             }],
@@ -182,9 +206,10 @@ class JobScheduler:
 
         campaign_lead, lead = row
         config = campaign.schedule_config or {}
+        sender_name = config.get("sender_name", "")
         message = campaign.message_template
         if config.get("personalize", True):
-            message = await personalize_message(campaign.message_template, lead)
+            message = await personalize_message(campaign.message_template, lead, sender_name)
 
         from app.services.delivery import deliver_to_lead
         delivery = await deliver_to_lead(db, campaign.org_id, lead, campaign.channel, message)

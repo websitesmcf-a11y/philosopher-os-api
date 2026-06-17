@@ -126,6 +126,19 @@ async def delete_campaign(
     return await service.delete_campaign(campaign_id)
 
 
+@router.get("/{campaign_id}/leads")
+async def campaign_leads(
+    campaign_id: str,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+    status: Optional[str] = Query(None),
+):
+    """Return all leads in a campaign with their delivery status."""
+    service = CampaignService(db, org_id=org_id)
+    return await service.get_campaign_leads(campaign_id, status_filter=status)
+
+
 @router.get("/{campaign_id}/stats")
 async def campaign_stats(
     campaign_id: str,

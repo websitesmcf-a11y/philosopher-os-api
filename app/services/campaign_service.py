@@ -202,6 +202,36 @@ class CampaignService:
             "rate": (campaign.reply_count / campaign.sent_count * 100) if campaign.sent_count else 0,
         }
 
+    async def get_campaign_leads(self, campaign_id: str, status_filter: str | None = None):
+        """Return all CampaignLead entries for a campaign with lead details joined in."""
+        query = (
+            select(CampaignLead, Lead)
+            .join(Lead, Lead.id == CampaignLead.lead_id)
+            .where(CampaignLead.campaign_id == campaign_id)
+        )
+        if self.org_id:
+            query = query.where(Lead.org_id == uuid.UUID(self.org_id))
+        if status_filter:
+            query = query.where(CampaignLead.status == status_filter)
+        query = query.order_by(CampaignLead.status, CampaignLead.sent_at.desc().nullslast())        result = await self.db.execute(query)
+        rows = result.all()
+        return {
+            "items": [
+                {
+                    "id": str(cl.lead_id),
+                    "name": lead.name,
+                    "phone": lead.phone,
+                    "email": lead.email,
+                    "company": lead.company,
+                    "status": cl.status,
+                    "sent_at": cl.sent_at.isoformat() if cl.sent_at else None,
+                    "replied_at": cl.replied_at.isoformat() if cl.replied_at else None,
+                }
+                for cl, lead in rows
+            ],
+            "total": len(rows),
+        }
+
     def _to_response(self, campaign: Campaign):
         return {
             "id": str(campaign.id),
