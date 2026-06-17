@@ -43,11 +43,19 @@ class CampaignService:
         # Enroll leads from the selected lead list
         if lead_list_id:
             try:
-                lead_query = select(Lead).where(text("list_id = :lid")).params(lid=lead_list_id)
-                if self.org_id:
-                    lead_query = lead_query.where(Lead.org_id == uuid.UUID(self.org_id))
-                list_leads = list((await self.db.execute(lead_query)).scalars().all())
-                lead_ids = [str(l.id) for l in list_leads]
+                # Try the in-memory LEAD_LIST_ITEMS dict first (leads stored by add_leads_to_list)
+                from app.routers.lead_lists import LEAD_LIST_ITEMS
+                item_ids = LEAD_LIST_ITEMS.get(lead_list_id, [])
+                if item_ids:
+                    lead_ids = [str(lid) for lid in item_ids]
+                else:
+                    # Fallback: query DB by list_id
+                    lead_query = select(Lead).where(Lead.list_id == uuid.UUID(lead_list_id))
+                    if self.org_id:
+                        lead_query = lead_query.where(Lead.org_id == uuid.UUID(self.org_id))
+                    list_leads = list((await self.db.execute(lead_query)).scalars().all())
+                    lead_ids = [str(l.id) for l in list_leads]
+
                 if lead_ids:
                     await self.add_leads(str(campaign.id), lead_ids)
             except Exception as e:
