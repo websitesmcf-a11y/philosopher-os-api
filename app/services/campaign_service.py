@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from app.database.models import Campaign, CampaignLead, Lead, Integration, ScheduledJob
 from app.schemas.campaign import CampaignCreate, CampaignUpdate
 
@@ -25,13 +25,35 @@ class CampaignService:
         return {"items": [self._to_response(c) for c in items], "total": total, "page": page, "page_size": page_size}
 
     async def create_campaign(self, data: CampaignCreate):
+        lead_list_id = data.lead_list_id
+        dump = data.model_dump(exclude_none=True)
+        dump.pop("lead_list_id", None)
+
         campaign = Campaign(
             id=uuid.uuid4(),
             org_id=uuid.UUID(self.org_id) if self.org_id else uuid.uuid4(),
-            **data.model_dump(exclude_none=True),
+            **dump,
         )
+        if lead_list_id:
+            campaign.lead_list_id = uuid.UUID(lead_list_id)
+
         self.db.add(campaign)
         await self.db.flush()
+
+        # Enroll leads from the selected lead list
+        if lead_list_id:
+            try:
+                lead_query = select(Lead).where(text("list_id = :lid")).params(lid=lead_list_id)
+                if self.org_id:
+                    lead_query = lead_query.where(Lead.org_id == uuid.UUID(self.org_id))
+                list_leads = list((await self.db.execute(lead_query)).scalars().all())
+                lead_ids = [str(l.id) for l in list_leads]
+                if lead_ids:
+                    await self.add_leads(str(campaign.id), lead_ids)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to enroll leads from list {lead_list_id}: {e}")
+
         return self._to_response(campaign)
 
     async def get_campaign(self, campaign_id: str):

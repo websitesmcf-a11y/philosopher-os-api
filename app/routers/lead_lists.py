@@ -288,3 +288,85 @@ async def unlock_list(
     ll["locked_at"] = None
     ll["updated_at"] = _now()
     return {"locked": False, "message": f"Lead list '{ll['name']}' is now unlocked."}
+
+
+# ─── Cleanup: remove leads without contact info ──────────────────────────
+
+
+@router.post("/{list_id}/cleanup")
+async def cleanup_lead_list(
+    list_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Remove leads from a list that lack phone numbers and/or email addresses.
+
+    Request body:
+      - remove_no_phone (bool): remove leads with no phone number
+      - remove_no_email (bool): remove leads with no email address
+
+    Both flags can be combined (removes leads missing either).
+    """
+    ll = LEAD_LISTS.get(list_id)
+    if not ll or ll["org_id"] != org_id:
+        raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+
+    remove_no_phone = body.get("remove_no_phone", False)
+    remove_no_email = body.get("remove_no_email", False)
+
+    if not remove_no_phone and not remove_no_email:
+        return {"removed": 0, "message": "No cleanup criteria specified. Set remove_no_phone and/or remove_no_email."}
+
+    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
+    if not lead_ids:
+        return {"removed": 0, "message": "List is empty."}
+
+    # Fetch actual lead rows to check phone/email
+    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    leads = result.scalars().all()
+
+    conditions = []
+    if remove_no_phone:
+        conditions.append(lambda l: not l.phone)
+    if remove_no_email:
+        conditions.append(lambda l: not l.email)
+
+    to_remove = []
+    for lead in leads:
+        if any(check(lead) for check in conditions):
+            to_remove.append(str(lead.id))
+
+    if not to_remove:
+        return {"removed": 0, "message": f"No leads match the cleanup criteria in this list ({len(lead_ids)} total)."}
+
+    # Remove from the in-memory list
+    items = [lid for lid in lead_ids if lid not in to_remove]
+    LEAD_LIST_ITEMS[list_id] = items
+    LEAD_LISTS[list_id]["lead_count"] = len(items)
+    LEAD_LISTS[list_id]["updated_at"] = _now()
+
+    # Clear list_id on the removed lead rows
+    from sqlalchemy import text as sa_text
+    for lid in to_remove:
+        await db.execute(sa_text(
+            "UPDATE leads SET list_id = NULL, updated_at = :now WHERE id = :id"
+        ).bindparams(now=_now(), id=lid))
+    await db.commit()
+
+    summary = []
+    if remove_no_phone:
+        summary.append("no phone")
+    if remove_no_email:
+        summary.append("no email")
+
+    return {
+        "removed": len(to_remove),
+        "remaining": len(items),
+        "total_before": len(lead_ids),
+        "criteria": summary,
+        "message": f"Removed {len(to_remove)} lead(s) with {', '.join(summary)} from '{ll['name']}'.",
+    }

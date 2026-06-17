@@ -10,6 +10,7 @@ class CampaignCreate(BaseModel):
     message_template: str
     schedule_config: dict = {}
     target_count: Optional[int] = 0
+    lead_list_id: Optional[str] = None
 
 
 class CampaignUpdate(BaseModel):
