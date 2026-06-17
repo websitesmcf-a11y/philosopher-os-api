@@ -349,6 +349,16 @@ class BeastModeService:
         if mission_id not in self.active_missions:
             return {"status": "error", "error": "Mission not found"}
         self.active_missions[mission_id]["status"] = action
+        if action == "cancel":
+            task = self._background_tasks.get(mission_id)
+            if task and not task.done():
+                task.cancel()
+                self.active_missions[mission_id]["errors"].append("Cancelled by user")
+            # Also set status on all pending steps so the frontend poll sees completion
+            for step in self.active_missions[mission_id].get("steps", []):
+                if step.get("status") not in ("completed", "failed"):
+                    step["status"] = "failed"
+                    step["error"] = "Cancelled by user"
         return {"status": action, "mission_id": mission_id}
 
     async def get_mission_status(self, mission_id: str) -> Optional[dict]:

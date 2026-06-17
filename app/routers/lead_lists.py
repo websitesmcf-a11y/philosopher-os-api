@@ -62,6 +62,9 @@ async def create_list(
         "created_by": user.get("id", ""),
         "lead_count": 0,
         "is_archived": False,
+        "locked": False,
+        "locked_by": None,
+        "locked_at": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -81,6 +84,8 @@ async def get_list(
     ll = LEAD_LISTS.get(list_id)
     if not ll or ll["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
 
     lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
     # Fetch leads from the leads table
@@ -114,6 +119,8 @@ async def delete_list(
     ll = LEAD_LISTS.get(list_id)
     if not ll or ll["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
     LEAD_LISTS[list_id]["is_archived"] = True
     return {"deleted": True}
 
@@ -132,6 +139,8 @@ async def add_leads_to_list(
     ll = LEAD_LISTS.get(list_id)
     if not ll or ll["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
 
     lead_ids: list[str] = body.get("lead_ids", [])
     existing = set(LEAD_LIST_ITEMS.get(list_id, []))
@@ -168,6 +177,8 @@ async def remove_lead_from_list(
     ll = LEAD_LISTS.get(list_id)
     if not ll or ll["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
 
     items = LEAD_LIST_ITEMS.get(list_id, [])
     if lead_id in items:
@@ -203,6 +214,8 @@ async def reserve_list_for_campaign(
     ll = LEAD_LISTS.get(list_id)
     if not ll or ll["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
 
     campaign_id = body.get("campaign_id")
     if not campaign_id:
@@ -232,3 +245,46 @@ async def reserve_list_for_campaign(
         "campaign_id": campaign_id,
         "list_id": list_id,
     }
+
+
+# ─── Locking / Unlocking ────────────────────────────────────────────────────
+
+
+@router.post("/{list_id}/lock")
+async def lock_list(
+    list_id: str,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Lock a lead list so no leads can be added or removed from it."""
+    ll = LEAD_LISTS.get(list_id)
+    if not ll or ll["org_id"] != org_id:
+        raise HTTPException(status_code=404, detail="Lead list not found")
+    if ll.get("locked"):
+        return {"locked": True, "locked_by": ll.get("locked_by"), "message": f"List is already locked by {ll.get('locked_by', 'unknown')}."}
+    ll["locked"] = True
+    ll["locked_by"] = user.get("id", "unknown")
+    ll["locked_at"] = _now()
+    ll["updated_at"] = _now()
+    return {"locked": True, "locked_by": ll["locked_by"], "message": f"Lead list '{ll['name']}' is now locked."}
+
+
+@router.post("/{list_id}/unlock")
+async def unlock_list(
+    list_id: str,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Unlock a lead list so leads can be added or removed again."""
+    ll = LEAD_LISTS.get(list_id)
+    if not ll or ll["org_id"] != org_id:
+        raise HTTPException(status_code=404, detail="Lead list not found")
+    if not ll.get("locked"):
+        return {"locked": False, "message": "List is not locked."}
+    ll["locked"] = False
+    ll["locked_by"] = None
+    ll["locked_at"] = None
+    ll["updated_at"] = _now()
+    return {"locked": False, "message": f"Lead list '{ll['name']}' is now unlocked."}
