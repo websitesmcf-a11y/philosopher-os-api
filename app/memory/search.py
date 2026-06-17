@@ -192,6 +192,10 @@ class MemorySearch:
             for r in rows
         ]
 
+    async def search(self, query: str, agent_name: str | None = None, limit: int = 10) -> list[dict]:
+        """Shorthand for agent tool calls — delegates to search_memories."""
+        return await self.search_memories(query, agent_name=agent_name, limit=limit)
+
     async def hybrid_search(self, query: str, limit: int = 10) -> list[dict]:
         """Combined search across all memory sources."""
         memories = await self.search_memories(query, limit=limit)
