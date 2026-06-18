@@ -1,5 +1,6 @@
 """Connections router — manage external service integrations from the app."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -33,13 +34,23 @@ async def _wa_bot_url(db: AsyncSession) -> str:
 
 
 @router.get("/whatsapp/status")
-async def whatsapp_live_status(db: AsyncSession = Depends(get_db)):
+async def whatsapp_live_status(
+    request: Request,
+    session: str = "",
+    db: AsyncSession = Depends(get_db),
+):
     """Live bridge state, polled by the Connections page. Keeps the stored
-    integration status in sync so campaign launch checks stay honest."""
+    integration status in sync so campaign launch checks stay honest.
+
+    Pass ?session=X to check a specific wa-bot session.
+    """
     url = await _wa_bot_url(db)
+    params = {}
+    if session:
+        params["session"] = session
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{url}/status")
+            resp = await client.get(f"{url}/status", params=params)
             data = resp.json()
     except Exception:
         return {"status": "bridge_offline", "connected": False, "phone": None, "qr_available": False}
@@ -47,7 +58,15 @@ async def whatsapp_live_status(db: AsyncSession = Depends(get_db)):
     # Mirror the live state onto the Integration row (upsert on first link)
     result = await db.execute(select(Integration).where(Integration.provider == "whatsapp"))
     row = result.scalar_one_or_none()
-    if data.get("connected"):
+
+    # Determine if any session is connected
+    is_connected = False
+    if "sessions" in data:
+        is_connected = any(s.get("connected") for s in data.get("sessions", []))
+    else:
+        is_connected = data.get("connected", False)
+
+    if is_connected:
         if row is None:
             row = Integration(provider="whatsapp", config={"bot_url": url})
             db.add(row)
@@ -64,17 +83,47 @@ async def whatsapp_live_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/whatsapp/qr")
-async def whatsapp_qr(db: AsyncSession = Depends(get_db)):
-    """Current login QR as PNG (404 while not waiting for a scan)."""
+async def whatsapp_qr(
+    request: Request,
+    session: str = "",
+    db: AsyncSession = Depends(get_db),
+):
+    """Current login QR as PNG. Pass ?session=X for a specific session."""
     url = await _wa_bot_url(db)
+    params = {}
+    if session:
+        params["session"] = session
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{url}/qr.png")
+            resp = await client.get(f"{url}/qr.png", params=params)
     except Exception:
         raise HTTPException(status_code=503, detail="WhatsApp bridge is not running")
     if resp.status_code != 200:
         raise HTTPException(status_code=404, detail="No QR available right now")
     return Response(content=resp.content, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/whatsapp/session")
+async def whatsapp_create_session(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new wa-bot session for a user to link their own WhatsApp."""
+    session_id = (payload.get("session_id") or "").strip()
+    if not session_id or not re.match(r'^[a-zA-Z0-9_-]+$', session_id):
+        raise HTTPException(status_code=400, detail="session_id required (alphanumeric, hyphens, underscores)")
+    from app.integrations.whatsapp import whatsapp as wa_client
+    result = await wa_client.create_session(session_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=503, detail=result.get("error", "Failed to create session"))
+    return result
+
+
+@router.get("/whatsapp/sessions")
+async def whatsapp_list_sessions(db: AsyncSession = Depends(get_db)):
+    """List all active wa-bot sessions."""
+    from app.integrations.whatsapp import whatsapp as wa_client
+    return await wa_client.list_sessions()
 
 
 @router.get("/google_calendar/auth-url")

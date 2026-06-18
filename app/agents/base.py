@@ -438,11 +438,24 @@ class BaseAgent(ABC):
             try:
                 import httpx
                 if provider == "whatsapp":
+                    from app.config import settings
+                    wa_url = settings.wa_bot_url.rstrip("/") or "http://localhost:8088"
+                    session = args.get("session", "")
+                    params = {}
+                    if session:
+                        params["session"] = session
                     async with httpx.AsyncClient(timeout=5.0) as client:
-                        wa_resp = await client.get("http://localhost:8088/status")
+                        wa_resp = await client.get(f"{wa_url}/status", params=params)
                         data = wa_resp.json()
-                        if data.get("connected"):
-                            return {"status": "connected", "detail": f"WhatsApp linked as +{data.get('phone', 'unknown')}", "phone": data.get("phone")}
+                        # Handle both single and multi-session responses
+                        if "sessions" in data:
+                            connected = any(s.get("connected") for s in data.get("sessions", []))
+                            phone = next((s.get("phone") for s in data.get("sessions", []) if s.get("phone")), None)
+                        else:
+                            connected = data.get("connected", False)
+                            phone = data.get("phone")
+                        if connected:
+                            return {"status": "connected", "detail": f"WhatsApp linked as +{phone}" if phone else "WhatsApp linked", "phone": phone}
                         return {"status": "disconnected", "detail": f"wa-bot status: {data.get('status', 'unknown')}. Scan QR code from the wa-bot page.", "qr_available": data.get("qr_available", False)}
                 else:
                     from app.database.session import async_session

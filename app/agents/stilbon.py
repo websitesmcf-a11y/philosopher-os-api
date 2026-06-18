@@ -37,6 +37,7 @@ class Stilbon(BaseAgent):
                     "properties": {
                         "lead_id": {"type": "string", "description": "Lead ID in CRM"},
                         "message": {"type": "string", "description": "Message text"},
+                        "session": {"type": "string", "description": "WhatsApp session ID (omit for default)"},
                     },
                     "required": ["lead_id", "message"],
                 },
@@ -50,6 +51,7 @@ class Stilbon(BaseAgent):
                         "lead_ids": {"type": "array", "items": {"type": "string"}, "description": "Array of lead IDs"},
                         "message": {"type": "string", "description": "Message template"},
                         "delay": {"type": "integer", "description": "Delay between sends in seconds"},
+                        "session": {"type": "string", "description": "WhatsApp session ID (omit for default)"},
                     },
                     "required": ["lead_ids", "message"],
                 },
@@ -70,11 +72,51 @@ class Stilbon(BaseAgent):
 
     async def _execute_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
         if tool_name == "send_whatsapp":
-            return {
-                "status": "blocked",
-                "reason": "WhatsApp is not connected. Connect it on the Integrations page first.",
-                "lead_id": args.get("lead_id"),
-            }
+            from app.config import settings
+            import httpx
+
+            session = args.get("session", "")
+            url = settings.wa_bot_url.rstrip("/")
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # Check status first
+                    params = {}
+                    if session:
+                        params["session"] = session
+                    status_resp = await client.get(f"{url}/status", params=params)
+                    status_data = status_resp.json()
+
+                    # Handle both single and multi-session responses
+                    if "sessions" in status_data:
+                        connected = any(s.get("connected") for s in status_data.get("sessions", []))
+                    else:
+                        connected = status_data.get("connected", False)
+
+                    if not connected:
+                        return {
+                            "status": "blocked",
+                            "reason": "WhatsApp is not connected. Connect it on the Integrations page first.",
+                            "lead_id": args.get("lead_id"),
+                        }
+
+                    # Send the message
+                    payload = {"to": args.get("lead_id", ""), "message": args.get("message", "")}
+                    if session:
+                        payload["session"] = session
+                    resp = await client.post(f"{url}/api/send", json=payload)
+                    data = resp.json()
+                    return {
+                        "status": data.get("status", "sent"),
+                        "to": data.get("to"),
+                        "session": session or "default",
+                    }
+            except httpx.RequestError:
+                return {
+                    "status": "blocked",
+                    "reason": "WhatsApp bridge unreachable. Make sure wa-bot is running.",
+                    "lead_id": args.get("lead_id"),
+                }
+
         if tool_name == "run_safe_batch":
             leads = args.get("lead_ids", [])
             return {

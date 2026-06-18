@@ -235,11 +235,23 @@ async def test_connection(provider: str, secrets: dict, config: dict) -> tuple[b
                 # "connected" means a phone is actually linked — a reachable
                 # bridge that is still waiting for a scan is NOT connected.
                 url = (config.get("bot_url") or settings.wa_bot_url).rstrip("/")
-                resp = await client.get(f"{url}/status")
+                session_id = config.get("session_id", "")
+                params = {}
+                if session_id:
+                    params["session"] = session_id
+                resp = await client.get(f"{url}/status", params=params)
                 if resp.status_code != 200:
                     return False, f"wa-bot returned {resp.status_code}"
                 data = resp.json()
-                state = data.get("status", "unknown")
+                # Handle multi-session response
+                if "sessions" in data:
+                    connected_sessions = [s for s in data.get("sessions", []) if s.get("connected")]
+                    if connected_sessions:
+                        phones = ", ".join(filter(None, [s.get("phone") for s in connected_sessions]))
+                        return True, f"WhatsApp linked{f' ({phones})' if phones else ''}"
+                    any_waiting = any(s.get("qr_available") for s in data.get("sessions", []))
+                    return False, "No WhatsApp session connected" if not any_waiting else "Bridge running — scan the QR code with your phone"
+                # Single-session response (backward compat)
                 if data.get("connected"):
                     phone = data.get("phone")
                     return True, f"WhatsApp linked{f' as +{phone}' if phone else ''}"
@@ -249,7 +261,7 @@ async def test_connection(provider: str, secrets: dict, config: dict) -> tuple[b
                     "reconnecting": "Reconnecting to WhatsApp",
                     "disconnected": "Bridge running but no session — open the QR view",
                 }
-                return False, friendly.get(state, f"Not linked (bridge state: {state})")
+                return False, friendly.get(data.get("status", ""), f"Not linked (bridge state: {data.get('status', 'unknown')})")
 
             if provider == "facebook":
                 token = secrets.get("page_access_token", "")
