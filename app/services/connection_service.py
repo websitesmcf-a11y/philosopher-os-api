@@ -366,10 +366,19 @@ class ConnectionService:
         for name, meta in PROVIDERS.items():
             row = saved.get(name)
             status = row.status if row else "disconnected"
-            # Live check for browser harness
+            # Browser harness: always use live WebSocket state, never trust DB cache.
+            # DB may hold "connected" from a previous token save even if the agent
+            # is not currently running. Beast Mode gates on the live bridge, so the
+            # Connections page must reflect the same source of truth.
             if name == "browser_harness":
                 from app.services.browser_harness_bridge import bridge
-                status = "connected" if bridge.connected else status
+                if bridge.connected:
+                    status = "connected"
+                elif row and row.status == "connected":
+                    # Token saved but agent not running
+                    status = "setup_required"
+                else:
+                    status = "disconnected"
             out.append({
                 "provider": name,
                 "label": meta["label"],
