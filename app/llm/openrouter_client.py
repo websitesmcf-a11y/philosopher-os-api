@@ -121,14 +121,22 @@ class OpenRouterClient(OpenAIClient):
                 self._last_used_model = target
                 logger.info("OpenRouter success: %s", target)
                 return result
-            except OpenAIRateLimitError as exc:
-                self._mark_rate_limited(target, str(exc))
+            except Exception as exc:
+                err_str = str(exc)
+                is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
+                if is_rate_limit:
+                    self._mark_rate_limited(target, err_str)
+                else:
+                    # Non-rate-limit error (bad response, model unavailable, etc.)
+                    # Skip this model briefly and try the next one
+                    self._rate_limits[target] = time.time() + 30
+                    logger.warning("OpenRouter model %s error: %s — stepping down", target, exc)
                 target = self._next_available()
                 if target is None:
                     raise AllOpenRouterModelsRateLimited(
-                        "All OpenRouter free models are rate-limited"
+                        "All OpenRouter free models exhausted"
                     ) from exc
-                logger.info("OpenRouter: stepping down to %s", target)
+                logger.info("OpenRouter: stepping to %s", target)
 
     async def generate_stream(
         self,
@@ -164,13 +172,15 @@ class OpenRouterClient(OpenAIClient):
                 if yielded:
                     raise  # mid-stream — can't retry
                 err_str = str(exc)
-                if "429" in err_str or "rate_limit" in err_str.lower():
+                is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
+                if is_rate_limit:
                     self._mark_rate_limited(target, err_str)
-                    target = self._next_available()
-                    if target is None:
-                        raise AllOpenRouterModelsRateLimited(
-                            "All OpenRouter free models are rate-limited"
-                        ) from exc
-                    logger.info("OpenRouter stream: stepping down to %s", target)
                 else:
-                    raise
+                    self._rate_limits[target] = time.time() + 30
+                    logger.warning("OpenRouter stream model %s error: %s — stepping down", target, exc)
+                target = self._next_available()
+                if target is None:
+                    raise AllOpenRouterModelsRateLimited(
+                        "All OpenRouter free models exhausted"
+                    ) from exc
+                logger.info("OpenRouter stream: stepping to %s", target)

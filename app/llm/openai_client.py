@@ -73,6 +73,9 @@ class OpenAIClient:
             if stream:
                 return await self._handle_stream(resp)
 
+            if not resp.choices:
+                raise ValueError(f"Model returned empty choices (model={model})")
+
             tool_calls = []
             content = resp.choices[0].message.content or ""
 
