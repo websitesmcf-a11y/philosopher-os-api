@@ -162,9 +162,11 @@ async def chat_stream(
                 ):
                     yield event
                 await stream_db.commit()
-            except Exception:
+            except Exception as exc:
                 await stream_db.rollback()
-                raise
+                logger.error("Chat stream error: %s", exc)
+                import json as _json
+                yield f"data: {_json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
 
     return StreamingResponse(
         event_generator(),
