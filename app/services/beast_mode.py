@@ -15,9 +15,12 @@ Level-based access:
 """
 
 import asyncio
+import logging
 from typing import Any, Optional
 from datetime import datetime
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class BeastLevel(Enum):
@@ -242,6 +245,9 @@ class BeastModeService:
         When ``mission_id`` is not provided (direct HTTP call), returns the full
         execution result. When it IS provided (background task), writes incremental
         progress to ``self.active_missions[mission_id]`` so the frontend can poll.
+
+        Level 4 (FULL) runs ALL agents in PARALLEL — speed is the point.
+        Levels 1-3 run agents sequentially for safety and approval gates.
         """
         council = self._get_council()
         from app.database.session import async_session
@@ -285,47 +291,118 @@ class BeastModeService:
 
         available_tools = tools_for_level(mode)
 
-        for step in plan.get("steps", []):
-            agent_id = step["agent"]
-            try:
-                agent_cls = council.agents.get(agent_id)
-                if not agent_cls:
-                    execution["errors"].append(f"Agent {agent_id} not found")
-                    continue
+        # ─── PARALLEL EXECUTION — Level 4 (FULL) ───────────────────────
+        is_parallel = mode == BeastLevel.FULL
 
-                # Create a real DB session for this mission step
-                async with async_session() as db:
-                    try:
-                        result = await asyncio.wait_for(
-                            council.process(
-                                user_input=plan.get("objective", ""),
-                                org_id=str(getattr(ctx, 'org_id', '')),
-                                db_session=db,
-                                agent=agent_id,
-                            ),
-                            timeout=1800.0,
-                        )
-                        await db.commit()
-                    except asyncio.TimeoutError:
-                        result = {"reply": "Agent timed out after 1800s — the objective may be too large. Break it into smaller missions (e.g. find 10 businesses per city instead of 50)."}
-                        execution["errors"].append(f"Agent {agent_id} timed out (1800s limit)")
-                        await db.rollback()
+        async def _run_single_agent(agent_id: str) -> dict:
+            """Run one agent with its own DB session and return the step result."""
+            agent_cls = council.agents.get(agent_id)
+            if not agent_cls:
+                return {"agent": agent_id, "status": "failed", "error": "Agent not found"}
 
-                reply = result.get("reply", "") if result else ""
-                execution["steps"].append({
-                    "agent": agent_id,
-                    "status": "completed",
-                    "result": reply[:500] if reply else "No output",
-                })
-            except Exception as e:
-                execution["errors"].append(f"Agent {agent_id} failed: {str(e)}")
-                execution["steps"].append({"agent": agent_id, "status": "failed", "error": str(e)})
+            async with async_session() as db:
+                try:
+                    result = await asyncio.wait_for(
+                        council.process(
+                            user_input=plan.get("objective", ""),
+                            org_id=str(getattr(ctx, 'org_id', '')),
+                            db_session=db,
+                            agent=agent_id,
+                        ),
+                        timeout=1800.0,
+                    )
+                    await db.commit()
+                    reply = (result or {}).get("reply", "") or ""
+                    return {
+                        "agent": agent_id,
+                        "status": "completed",
+                        "result": reply[:500] if reply else "No output",
+                    }
+                except asyncio.TimeoutError:
+                    await db.rollback()
+                    execution["errors"].append(f"Agent {agent_id} timed out (1800s limit)")
+                    return {
+                        "agent": agent_id,
+                        "status": "timeout",
+                        "result": "Timed out after 1800s",
+                    }
+                except Exception as e:
+                    await db.rollback()
+                    execution["errors"].append(f"Agent {agent_id} failed: {str(e)}")
+                    return {
+                        "agent": agent_id,
+                        "status": "failed",
+                        "error": str(e),
+                    }
 
-            # Write incremental progress so the frontend can poll
-            self.active_missions[mission_id] = execution
+        steps = plan.get("steps", [])
+        agent_ids = [s["agent"] for s in steps if s.get("agent")]
+
+        if is_parallel:
+            # Run ALL agents concurrently — speed is the point
+            logger.info(f"Beast Mode FULL: running {len(agent_ids)} agents in PARALLEL")
+            step_results = await asyncio.gather(
+                *[_run_single_agent(aid) for aid in agent_ids],
+                return_exceptions=True,
+            )
+            # Flatten results (gather with return_exceptions wraps exceptions)
+            for r in step_results:
+                if isinstance(r, Exception):
+                    execution["errors"].append(f"Agent crashed: {r}")
+                    execution["steps"].append({"agent": "unknown", "status": "crashed", "error": str(r)})
+                else:
+                    execution["steps"].append(r)
+            # Update warnings with any browser-harness hint
+            if not bridge.connected:
+                execution["warnings"].append(
+                    "Browser harness was NOT connected during this mission. "
+                    "Agents fell back to OpenStreetMap + web search (fewer phone numbers). "
+                    "Connect it from Integrations → Browser Harness for full Google Maps data."
+                )
+        else:
+            # Sequential execution (Levels 1-3)
+            for step in steps:
+                agent_id = step["agent"]
+                try:
+                    agent_cls = council.agents.get(agent_id)
+                    if not agent_cls:
+                        execution["errors"].append(f"Agent {agent_id} not found")
+                        continue
+
+                    async with async_session() as db:
+                        try:
+                            result = await asyncio.wait_for(
+                                council.process(
+                                    user_input=plan.get("objective", ""),
+                                    org_id=str(getattr(ctx, 'org_id', '')),
+                                    db_session=db,
+                                    agent=agent_id,
+                                ),
+                                timeout=1800.0,
+                            )
+                            await db.commit()
+                        except asyncio.TimeoutError:
+                            result = {"reply": "Agent timed out after 1800s"}
+                            execution["errors"].append(f"Agent {agent_id} timed out")
+                            await db.rollback()
+
+                    reply = (result or {}).get("reply", "") or ""
+                    execution["steps"].append({
+                        "agent": agent_id,
+                        "status": "completed",
+                        "result": reply[:500] if reply else "No output",
+                    })
+                except Exception as e:
+                    execution["errors"].append(f"Agent {agent_id} failed: {str(e)}")
+                    execution["steps"].append({"agent": agent_id, "status": "failed", "error": str(e)})
+
+                # Write incremental progress so the frontend can poll
+                self.active_missions[mission_id] = execution
 
         execution["status"] = "completed" if not execution["errors"] else "completed_with_errors"
         execution["completed_at"] = datetime.utcnow().isoformat()
+        execution["total_agents"] = len(agent_ids)
+        execution["completed_agents"] = sum(1 for s in execution["steps"] if s.get("status") == "completed")
         self.active_missions[mission_id] = execution
         return execution
 

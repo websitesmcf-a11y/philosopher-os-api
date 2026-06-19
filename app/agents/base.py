@@ -677,14 +677,17 @@ class BaseAgent(ABC):
                 _LL[list_id] = list_entry
                 _LLI[list_id] = list(saved_ids) if saved_ids else []
 
-            # Step 4: Update list_id on lead rows
+            # Step 4: Update list_id on lead rows (cast to UUID to avoid type mismatch)
             if context and context.db_session and saved_ids:
                 from sqlalchemy import text as sa_text
                 for lid in saved_ids:
-                    await context.db_session.execute(sa_text(
-                        "UPDATE leads SET list_id = :list_id, updated_at = :now WHERE id = :id"
-                    ).bindparams(list_id=list_id, now=now, id=lid))
-                await context.db_session.commit()
+                    stmt = sa_text("UPDATE leads SET list_id = CAST(:list_id AS UUID), "
+                                   "updated_at = CAST(:now AS TIMESTAMP) WHERE id = CAST(:id AS UUID)")
+                    await context.db_session.execute(stmt.bindparams(list_id=list_id, now=now, id=lid))
+                try:
+                    await context.db_session.commit()
+                except Exception:
+                    await context.db_session.rollback()
 
             # Step 5: Reserve if requested
             reserve_info = {}

@@ -506,6 +506,11 @@ def _build_gmaps_script(query: str, target: int) -> str:
         "print('RESULTS_JSON_START')",
         "print(data if isinstance(data, str) else '')",
         "print('RESULTS_JSON_END')",
+        "# Close the tab to prevent tab leaks (PC crash fix)",
+        "try:",
+        "    cdp('Target.closeTarget', targetId=current_tab())",
+        "except Exception:",
+        "    pass",
     ]
     return "\n".join(lines) + "\n"
 
@@ -772,12 +777,19 @@ class BrowserHarnessCLI:
             return {"status": "error", "message": str(e)}
 
     async def fetch_page(self, url: str) -> dict:
-        """Open a URL in the user's Chrome and return the page text + title."""
+        """Open a URL in the user's Chrome and return the page text + title.
+        Also closes the tab afterwards to prevent tab leaks.
+        """
         script = (
             f"new_tab({url!r})\n"
             "wait_for_load()\n"
             "print(page_info())\n"
             "print(js('document.body.innerText.slice(0, 4000)'))\n"
+            "# Close the tab (PC crash fix)\n"
+            "try:\n"
+            "    cdp('Target.closeTarget', targetId=current_tab())\n"
+            "except Exception:\n"
+            "    pass\n"
         )
         return await self.run_script(script)
 

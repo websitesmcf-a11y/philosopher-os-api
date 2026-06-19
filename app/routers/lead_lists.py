@@ -370,3 +370,153 @@ async def cleanup_lead_list(
         "criteria": summary,
         "message": f"Removed {len(to_remove)} lead(s) with {', '.join(summary)} from '{ll['name']}'.",
     }
+
+
+# ─── Phone number cleaning ────────────────────────────────────────────────────
+
+
+@router.post("/{list_id}/clean-phones")
+async def clean_lead_phones(
+    list_id: str,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Analyze and fix all phone numbers in a lead list.
+
+    Returns a full report without modifying anything (dry-run).
+    Call PATCH /{list_id}/clean-phones/apply to persist fixes.
+    """
+    ll = LEAD_LISTS.get(list_id)
+    if not ll or ll["org_id"] != org_id:
+        raise HTTPException(status_code=404, detail="Lead list not found")
+
+    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
+    if not lead_ids:
+        return {"total": 0, "message": "List is empty."}
+
+    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    leads = result.scalars().all()
+
+    from app.services.lead_cleaner import clean_lead_list
+
+    lead_dicts = [{"id": str(l.id), "name": l.name, "phone": l.phone or ""} for l in leads]
+    report = clean_lead_list(lead_dicts)
+
+    return {
+        "list_id": list_id,
+        "list_name": ll["name"],
+        "total": report["total"],
+        "valid": report["valid"],
+        "fixed": report["fixed"],
+        "invalid": report["invalid"],
+        "duplicates_found": report["duplicates_removed"],
+        "results": report["results"],
+    }
+
+
+@router.patch("/{list_id}/clean-phones/apply")
+async def apply_phone_fixes(
+    list_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Apply phone number fixes from a previous analysis.
+
+    Request body options:
+      - auto_fix (bool): apply all high-confidence fixes (default: true)
+      - remove_invalid (bool): delete leads with invalid phones (default: false)
+      - deduplicate (bool): remove duplicate phone numbers (default: false)
+    """
+    ll = LEAD_LISTS.get(list_id)
+    if not ll or ll["org_id"] != org_id:
+        raise HTTPException(status_code=404, detail="Lead list not found")
+
+    auto_fix = body.get("auto_fix", True)
+    remove_invalid = body.get("remove_invalid", False)
+    deduplicate = body.get("deduplicate", False)
+
+    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
+    if not lead_ids:
+        return {"message": "List is empty.", "updated": 0, "removed": 0}
+
+    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    leads = result.scalars().all()
+
+    from app.services.lead_cleaner import clean_lead_list
+
+    lead_dicts = [{"id": str(l.id), "name": l.name, "phone": l.phone or ""} for l in leads]
+    report = clean_lead_list(lead_dicts)
+
+    updated = 0
+    removed = 0
+    fix_log = []
+
+    for r in report["results"]:
+        lead_id = r["lead_id"]
+        # Find the actual Lead object
+        lead = next((l for l in leads if str(l.id) == lead_id), None)
+        if not lead:
+            continue
+
+        if auto_fix and r["confidence"] in ("high", "medium") and r["cleaned_phone"]:
+            if r["cleaned_phone"] != (lead.phone or "").strip():
+                lead.phone = r["cleaned_phone"]
+                updated += 1
+                fix_log.append({
+                    "lead_id": lead_id,
+                    "name": r["name"],
+                    "from": r["original_phone"],
+                    "to": r["cleaned_phone"],
+                })
+
+        if remove_invalid and r["confidence"] == "invalid" and not r.get("splits"):
+            # Remove from the in-memory list
+            item_list = LEAD_LIST_ITEMS.get(list_id, [])
+            if lead_id in item_list:
+                item_list.remove(lead_id)
+                LEAD_LIST_ITEMS[list_id] = item_list
+                LEAD_LISTS[list_id]["lead_count"] = len(item_list)
+                LEAD_LISTS[list_id]["updated_at"] = _now()
+                removed += 1
+                fix_log.append({
+                    "lead_id": lead_id,
+                    "name": r["name"],
+                    "action": "removed_invalid",
+                    "reason": r["reason"],
+                })
+
+    # Deduplicate by phone number
+    if deduplicate:
+        seen_phones: dict[str, str] = {}
+        for r in report["results"]:
+            if r["cleaned_phone"] and r["confidence"] != "invalid":
+                if r["cleaned_phone"] in seen_phones:
+                    # Remove duplicate
+                    item_list = LEAD_LIST_ITEMS.get(list_id, [])
+                    if r["lead_id"] in item_list:
+                        item_list.remove(r["lead_id"])
+                        LEAD_LIST_ITEMS[list_id] = item_list
+                        LEAD_LISTS[list_id]["lead_count"] = len(item_list)
+                        LEAD_LISTS[list_id]["updated_at"] = _now()
+                        removed += 1
+                        fix_log.append({
+                            "lead_id": r["lead_id"],
+                            "name": r["name"],
+                            "action": "removed_duplicate",
+                            "phone": r["cleaned_phone"],
+                        })
+                else:
+                    seen_phones[r["cleaned_phone"]] = r["lead_id"]
+
+    await db.commit()
+
+    return {
+        "updated": updated,
+        "removed": removed,
+        "total_before": len(lead_ids),
+        "remaining": len(LEAD_LIST_ITEMS.get(list_id, [])),
+        "fixes": fix_log,
+    }

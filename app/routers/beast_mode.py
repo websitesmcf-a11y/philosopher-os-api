@@ -90,6 +90,9 @@ async def execute_mission(req: ExecuteMissionRequest):
     progress (status, errors, completed steps). The backend runs agents in a
     background ``asyncio.Task`` so Railway's HTTP proxy timeout (~60s) doesn't
     kill long-running missions.
+
+    Level 4 (FULL) runs ALL selected agents in PARALLEL — expect near-instant
+    completion for reasoning agents alongside longer lead-gen agents.
     """
     from app.services.beast_mode import beast_mode as bm, BeastLevel
 
@@ -106,6 +109,55 @@ async def execute_mission(req: ExecuteMissionRequest):
     plan = await bm.plan_mission(MissionCtx(), req.objective, req.agents, level)
     result = await bm.start_mission_async(MissionCtx(), plan)
     return result
+
+
+@router.post("/test-parallel")
+async def test_parallel_execution():
+    """Run a quick parallel execution test with 3 dummy agents.
+
+    Level 4 FULL mode: all 3 agents run simultaneously.
+    Returns how long each took, proving parallel execution.
+    """
+    from app.services.beast_mode import beast_mode as bm, BeastLevel
+    import time
+
+    class TestCtx:
+        workspace_id = None
+        org_id = "00000000-0000-0000-0000-000000000001"
+
+    # Create a test plan with 3 agents
+    plan = {
+        "objective": "Run a quick parallel test. Each agent should complete in 2-4 seconds.",
+        "mode": "full",
+        "agents": ["heraclitus", "pythagoras", "solon"],
+        "steps": [
+            {"agent": "heraclitus"},
+            {"agent": "pythagoras"},
+            {"agent": "solon"},
+        ],
+    }
+
+    start = time.monotonic()
+    result = await bm.execute_mission(TestCtx(), plan)
+    elapsed = time.monotonic() - start
+
+    steps = result.get("steps", [])
+    return {
+        "test": "parallel_execution",
+        "mode": "full",
+        "total_wall_time_seconds": round(elapsed, 2),
+        "agents_executed": len(steps),
+        "parallel_efficiency": f"If sequential, 3 agents at ~3s each = ~9s total. Actual: {round(elapsed, 2)}s — {'✅ PARALLEL' if elapsed < 8 else '⚠️ SEQUENTIAL (check for issues)'}",
+        "steps": [
+            {
+                "agent": s.get("agent"),
+                "status": s.get("status"),
+                "result_preview": (s.get("result") or "")[:100],
+            }
+            for s in steps
+        ],
+        "errors": result.get("errors", []),
+    }
 
 
 @router.post("/{mission_id}/{action}")

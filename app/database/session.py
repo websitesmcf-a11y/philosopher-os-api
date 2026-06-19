@@ -7,7 +7,10 @@ logger = logging.getLogger(__name__)
 
 # Use Supabase/PostgreSQL when configured; otherwise fall back to a local
 # SQLite database so the app runs natively without external services.
-_sqlite_path = Path(__file__).resolve().parents[2] / "socrates.db"
+# The data/ subdirectory is mounted as a Railway Volume for persistence.
+_data_dir = Path(__file__).resolve().parents[2] / "data"
+_data_dir.mkdir(exist_ok=True)
+_sqlite_path = _data_dir / "socrates.db"
 DATABASE_URL = settings.supabase_db_url or f"sqlite+aiosqlite:///{_sqlite_path}"
 
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
@@ -33,10 +36,29 @@ async def init_db() -> None:
     PostgreSQL deployments use Alembic migrations instead; create_all is a
     no-op for tables that already exist.
     """
-    from app.database.models import Base, User
+    from app.database.models import Base, User, Organization
+    from sqlalchemy import text
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database schema ensured (create_all)")
+
+    # Seed default org if not exists (needed for beast mode / dev flows)
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                text("SELECT id FROM organizations WHERE id = '00000000-0000-0000-0000-000000000001'")
+            )
+            if not result.fetchone():
+                session.add(Organization(
+                    id="00000000-0000-0000-0000-000000000001",
+                    name="Default Org",
+                    slug="default",
+                ))
+                await session.commit()
+                logger.info("Seeded default organization")
+    except Exception as e:
+        logger.warning(f"Could not seed default organization: {e}")
 
     # Seed dev user if not exists (for local development without Clerk)
     try:
@@ -46,7 +68,6 @@ async def init_db() -> None:
                 select(User).where(User.email == "dev@localhost")
             )
             if not result.scalar_one_or_none():
-                import uuid
                 session.add(User(
                     id="00000000-0000-0000-0000-000000000010",
                     email="dev@localhost",
