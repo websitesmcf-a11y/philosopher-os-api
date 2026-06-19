@@ -129,7 +129,7 @@ class OpenRouterClient(OpenAIClient):
                 else:
                     # Non-rate-limit error (bad response, model unavailable, etc.)
                     # Skip this model briefly and try the next one
-                    self._rate_limits[target] = time.time() + 30
+                    self._rate_limits[target] = time.time() + 8
                     logger.warning("OpenRouter model %s error: %s — stepping down", target, exc)
                 target = self._next_available()
                 if target is None:
@@ -176,7 +176,7 @@ class OpenRouterClient(OpenAIClient):
                 if is_rate_limit:
                     self._mark_rate_limited(target, err_str)
                 else:
-                    self._rate_limits[target] = time.time() + 30
+                    self._rate_limits[target] = time.time() + 8
                     logger.warning("OpenRouter stream model %s error: %s — stepping down", target, exc)
                 target = self._next_available()
                 if target is None:

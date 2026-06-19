@@ -128,6 +128,7 @@ class LLMClient:
         name, client = self._select_provider(model)
         attempts = [(name, client)] + self._fallback_chain(exclude=name)
         last_err: Exception | None = None
+        errors: list[str] = []
         for prov_name, prov in attempts:
             try:
                 return await prov.generate(
@@ -141,8 +142,10 @@ class LLMClient:
                 )
             except Exception as err:
                 last_err = err
+                errors.append(f"{prov_name}: {err}")
                 logger.warning("Provider %s failed: %s. Trying next.", prov_name, err)
-        raise last_err or RuntimeError("No LLM provider configured")
+        detail = " | ".join(errors) if errors else "no providers configured"
+        raise RuntimeError(f"All LLM providers failed — {detail}") from last_err
 
     async def generate_stream(
         self,
@@ -157,6 +160,7 @@ class LLMClient:
         name, client = self._select_provider(model)
         attempts = [(name, client)] + self._fallback_chain(exclude=name)
         last_err: Exception | None = None
+        errors: list[str] = []
         for prov_name, prov in attempts:
             if not hasattr(prov, "generate_stream"):
                 continue
@@ -177,8 +181,10 @@ class LLMClient:
                 if yielded:
                     raise  # mid-stream — cannot fall back cleanly
                 last_err = err
+                errors.append(f"{prov_name}: {err}")
                 logger.warning("Stream provider %s failed: %s. Trying next.", prov_name, err)
-        raise last_err or RuntimeError("No streaming LLM provider configured")
+        detail = " | ".join(errors) if errors else "no providers configured"
+        raise RuntimeError(f"All LLM providers failed — {detail}") from last_err
 
     def build_messages(
         self,
