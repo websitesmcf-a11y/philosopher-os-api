@@ -105,6 +105,13 @@ PROVIDERS: dict[str, dict] = {
         "config": [],
         "docs": "Get a key at platform.deepseek.com.",
     },
+    "ollama": {
+        "label": "Ollama (Local AI)",
+        "description": "Connect a local or remote Ollama instance as the final AI fallback when all cloud models are rate-limited. Models used: dolphin-llama3 (8B), llama3.2 (3B).",
+        "secrets": [],
+        "config": ["url"],
+        "docs": "1. Install Ollama from ollama.com\n2. Run: ollama pull dolphin-llama3 && ollama pull llama3.2\n3. Enter the URL below (default: http://localhost:11434)\n\nFor a remote server, use the server's IP/hostname instead of localhost.",
+    },
 }
 
 
@@ -127,8 +134,10 @@ def _apply_to_settings(provider: str, secrets: dict, config: dict) -> None:
             settings.smtp_port = int(inbox.get("port") or 587)
     elif provider == "whatsapp" and config.get("bot_url"):
         settings.wa_bot_url = config["bot_url"]
+    elif provider == "ollama" and config.get("url"):
+        settings.ollama_url = config["url"]
 
-    if provider in ("anthropic", "openai", "deepseek"):
+    if provider in ("anthropic", "openai", "deepseek", "ollama"):
         from app.llm.client import llm
         llm.reset_providers()
 
@@ -310,6 +319,15 @@ async def test_connection(provider: str, secrets: dict, config: dict) -> tuple[b
                 )
                 ok = resp.status_code == 200
                 return ok, "DeepSeek key valid" if ok else f"DeepSeek returned {resp.status_code}"
+
+            if provider == "ollama":
+                url = (config.get("url") or settings.ollama_url).rstrip("/")
+                resp = await client.get(f"{url}/api/tags", timeout=5.0)
+                if resp.status_code == 200:
+                    models = [m.get("name", "") for m in resp.json().get("models", [])]
+                    summary = ", ".join(models[:4]) or "no models pulled yet"
+                    return True, f"Ollama connected — {len(models)} model(s): {summary}"
+                return False, f"Ollama returned {resp.status_code}"
 
     except httpx.HTTPError as e:
         return False, f"Connection failed: {e}"

@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
-    default_llm_provider: str = "auto"  # auto | anthropic | openai | deepseek
+    openrouter_api_key: Optional[str] = None
+    ollama_url: str = "http://localhost:11434"
+    default_llm_provider: str = "openrouter"  # openrouter | anthropic | openai | deepseek | ollama | auto
     default_llm_model: str = "claude-sonnet-4-20250514"
     deepseek_model: str = "deepseek-chat"
     embedding_model: str = "text-embedding-3-small"

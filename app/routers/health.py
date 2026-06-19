@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends
-from app.core.errors import AppError
+from fastapi import APIRouter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -52,3 +51,32 @@ async def readiness():
 @router.get("/health/liveness")
 async def liveness():
     return {"status": "alive"}
+
+
+@router.get("/health/model")
+async def model_status():
+    """Returns the current active LLM provider and model."""
+    from app.llm.client import llm
+    from app.llm.openrouter_client import WATERFALL
+
+    prov_name = llm.active_provider
+    prov = llm._providers.get(prov_name)
+
+    result: dict = {"provider": prov_name, "model": llm.active_model}
+
+    if hasattr(prov, "rate_limited_models"):
+        rl = prov.rate_limited_models
+        result["rate_limited"] = rl
+        result["waterfall_position"] = next(
+            (i + 1 for i, m in enumerate(WATERFALL) if m == prov.current_model), None
+        )
+        result["waterfall_total"] = len(WATERFALL)
+        result["using_local"] = False
+    elif prov_name == "ollama":
+        result["using_local"] = True
+        result["rate_limited"] = []
+    else:
+        result["using_local"] = False
+        result["rate_limited"] = []
+
+    return result
