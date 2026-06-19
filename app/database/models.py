@@ -390,6 +390,52 @@ class Notification(Base, TimestampMixin):
     read = Column(Boolean, default=False)
 
 
+# ─── Hermes Background Jobs ────────────────────────────────────────────
+
+class HermesJob(Base, TimestampMixin):
+    """Persistent background job record. Survives server restarts."""
+    __tablename__ = "hermes_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    parent_job_id = Column(UUID(as_uuid=True), ForeignKey("hermes_jobs.id", ondelete="SET NULL"), nullable=True)
+    agent_name = Column(String(100), nullable=False)
+    task = Column(Text, nullable=False)
+    task_type = Column(String(100), default="general")
+    source = Column(String(100), default="api")       # api | beast_mode | campaign | schedule | chain
+    mission_id = Column(String(255), nullable=True)   # links to beast mode missions
+    input_data = Column(JSON, default=dict)
+    output_data = Column(JSON, nullable=True)
+    status = Column(String(50), default="queued")     # queued|running|completed|failed|cancelled|retrying
+    progress_percent = Column(Integer, default=0)
+    progress_message = Column(Text, nullable=True)
+    current_step = Column(String(255), nullable=True)
+    completed_steps = Column(Integer, default=0)
+    total_steps = Column(Integer, nullable=True)
+    priority = Column(Integer, default=5)
+    max_attempts = Column(Integer, default=2)
+    attempt_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    cancellation_requested = Column(Boolean, default=False)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    scheduled_for = Column(DateTime(timezone=True), nullable=True)
+
+
+class HermesJobLog(Base):
+    """Structured log entries for a Hermes job."""
+    __tablename__ = "hermes_job_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("hermes_jobs.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(UUID(as_uuid=True), nullable=True)
+    level = Column(String(20), default="info")        # debug | info | warning | error | success
+    message = Column(Text, nullable=False)
+    extra_metadata = Column("metadata", JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 # ─── Integrations / Connections ────────────────────────────────────────
 
 class Integration(Base, TimestampMixin):

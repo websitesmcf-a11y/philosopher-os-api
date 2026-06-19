@@ -80,6 +80,10 @@ async def lifespan(app: FastAPI):
     hermes.council = council
     plato_set_hermes(hermes)
     app.state.hermes = hermes
+    # Recover jobs that were running when the server last crashed
+    await hermes.recover_jobs()
+    # Warm the in-memory cache with recent job history
+    await hermes.load_recent_jobs()
     app.state.autopilot = Autopilot(council=council)
     # Start the in-process job scheduler (drip campaigns, scheduled posts)
     from app.services.scheduler import scheduler

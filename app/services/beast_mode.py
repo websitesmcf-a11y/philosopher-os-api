@@ -201,11 +201,10 @@ class BeastModeService:
     async def start_mission_async(self, ctx: Any, plan: dict) -> dict:
         """Start mission execution in the background and return immediately.
 
-        The calling HTTP handler returns ``{mission_id, status: "running"}`` right
-        away. The frontend polls ``GET /api/v1/beast-mode/{mission_id}`` to track
-        progress as each agent completes.
+        Creates a Hermes parent job so the mission persists across restarts.
+        The frontend polls GET /api/v1/beast-mode/{mission_id} for live status,
+        and GET /api/v1/hermes/jobs/{hermes_job_id} for full persistence + logs.
         """
-        council = self._get_council()
         from app.database.session import async_session
 
         mode_value = plan.get("mode", "assisted")
@@ -224,20 +223,80 @@ class BeastModeService:
             "steps": [],
             "errors": [],
             "warnings": [],
+            "hermes_job_id": None,
         }
 
+        # Create persistent Hermes parent job
+        try:
+            from app.main import app as _app
+            hermes = getattr(_app.state, "hermes", None)
+            if hermes:
+                org_id = str(getattr(ctx, "org_id", "")) or "00000000-0000-0000-0000-000000000001"
+                hermes_result = hermes.submit_job(
+                    agent_name="beast_mode",
+                    task=plan.get("objective", "Beast Mode mission"),
+                    org_id=org_id,
+                    task_type="beast_mode",
+                    source="beast_mode",
+                    input_data={"plan": plan, "mission_id": mission_id},
+                    max_attempts=1,
+                    mission_id=mission_id,
+                )
+                hermes_job_id = hermes_result.get("job_id")
+                self.active_missions[mission_id]["hermes_job_id"] = hermes_job_id
+                self._hermes_job_ids = getattr(self, "_hermes_job_ids", {})
+                self._hermes_job_ids[mission_id] = hermes_job_id
+        except Exception as e:
+            logger.warning("Beast Mode: could not create Hermes job: %s", e)
+            hermes_job_id = None
+
         async def _run():
-            """Inner coroutine that actually runs agents, updating the mission dict."""
+            """Inner coroutine that runs agents and updates both mission state and Hermes job."""
             try:
                 await self.execute_mission(ctx, plan, mission_id=mission_id)
+                # Sync final state to Hermes
+                await self._sync_to_hermes(mission_id)
             except asyncio.CancelledError:
                 self.active_missions[mission_id]["status"] = "cancelled"
+                await self._sync_to_hermes(mission_id)
             except Exception as e:
                 self.active_missions[mission_id]["status"] = "failed"
                 self.active_missions[mission_id]["errors"].append(str(e))
+                await self._sync_to_hermes(mission_id)
 
         self._background_tasks[mission_id] = asyncio.create_task(_run())
-        return {"mission_id": mission_id, "status": "running"}
+        return {"mission_id": mission_id, "status": "running",
+                "hermes_job_id": self.active_missions[mission_id].get("hermes_job_id")}
+
+    async def _sync_to_hermes(self, mission_id: str) -> None:
+        """Push final mission state into the Hermes parent job for persistence."""
+        try:
+            from app.main import app as _app
+            hermes = getattr(_app.state, "hermes", None)
+            if not hermes:
+                return
+            hermes_job_ids = getattr(self, "_hermes_job_ids", {})
+            job_id = hermes_job_ids.get(mission_id)
+            if not job_id:
+                return
+            mission = self.active_missions.get(mission_id, {})
+            status = mission.get("status", "completed")
+            hermes_status = "completed" if "completed" in status else status
+            steps = mission.get("steps", [])
+            total = len(steps)
+            done = sum(1 for s in steps if s.get("status") == "completed")
+            pct = int((done / total) * 100) if total else 100
+            await hermes._db_update(
+                job_id,
+                status=hermes_status,
+                progress_percent=pct,
+                output_data={"mission": mission},
+                completed_at=datetime.utcnow(),
+                completed_steps=done,
+                total_steps=total,
+            )
+        except Exception as e:
+            logger.warning("Beast Mode: Hermes sync failed: %s", e)
 
     async def execute_mission(self, ctx: Any, plan: dict, mission_id: str = "") -> dict:
         """Execute a planned Beast Mode mission with real agent execution.
