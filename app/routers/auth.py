@@ -421,8 +421,8 @@ async def create_invite(
     await db.flush()
     await db.commit()
 
-    base_url = str(settings.api_url or "http://localhost:3000").replace("/api/v1", "")
-    invite_url = f"{base_url}/signup?invite={token}&role={role}"
+    base_url = str(settings.api_url or "https://philosopher-os.vercel.app").replace("/api/v1", "")
+    invite_url = f"{base_url}/login?invite={token}&role={role}"
     return {"invite_url": invite_url, "token": token, "role": role, "expires_in_days": 7}
 
 
