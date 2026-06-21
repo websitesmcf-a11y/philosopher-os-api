@@ -60,6 +60,9 @@ PLATO_SYSTEM_PROMPT = (
 
 
 class Plato(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
+
     # Plato orchestrates — it must NOT browse, scrape, or fire background jobs
     # itself. Those temptations made it wander instead of delegating. It keeps
     # delegate_to + store_memory, plus check_background_job to report on jobs

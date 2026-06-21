@@ -33,6 +33,9 @@ Your responses should make people think harder. Be rigorous but not rude."""
 
 
 class Socrates(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
+
     def __init__(self):
         super().__init__(
             name="socrates",
