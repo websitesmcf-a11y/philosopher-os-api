@@ -37,4 +37,7 @@ def encrypt_dict(data: dict) -> str:
 def decrypt_dict(token: str) -> dict:
     if not token:
         return {}
-    return json.loads(_fernet().decrypt(token.encode()).decode())
+    try:
+        return json.loads(_fernet().decrypt(token.encode()).decode())
+    except Exception:
+        return {}
