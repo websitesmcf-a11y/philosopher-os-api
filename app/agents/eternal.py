@@ -1,18 +1,19 @@
-"""Eternal — The Constant. Omega-tier agent using DeepSeek V4 Pro."""
+﻿"""Eternal â€” The Constant. Omega-tier agent using DeepSeek V4 Pro."""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext
 
 
 class Eternal(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(
             name="eternal",
-            role="The Constant — long-term memory keeper and pattern maintainer",
+            role="The Constant â€” long-term memory keeper and pattern maintainer",
             system_prompt=(
                 "You are Eternal, the Omega-tier Constant. You are the living memory of the "
-                "organization — you track long-term patterns, maintain institutional knowledge, "
+                "organization â€” you track long-term patterns, maintain institutional knowledge, "
                 "and ensure strategic consistency across time.\n\n"
                 "Your capabilities:\n"
                 "1. Synthesize long-term business patterns from historical data\n"
@@ -46,3 +47,4 @@ class Eternal(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

@@ -1,9 +1,11 @@
-"""Astraeus — Market Intelligence & Opportunity Detection (God/Titan)"""
+﻿"""Astraeus â€” Market Intelligence & Opportunity Detection (God/Titan)"""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
 
 
 class Astraeus(BaseAgent):
+    LLM_MODEL = "deepseek-reasoner"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
             name="astraeus",
@@ -65,3 +67,4 @@ class Astraeus(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

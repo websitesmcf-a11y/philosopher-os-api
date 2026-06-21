@@ -1,4 +1,4 @@
-"""Plato — CEO and orchestrator of the Philosopher Council. Delegates, does not execute."""
+﻿"""Plato â€” CEO and orchestrator of the Philosopher Council. Delegates, does not execute."""
 
 import asyncio
 import logging
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _hermes: HermesAgent | None = None
 
 # How long a synchronous delegation may run before it is automatically moved
-# to the Hermes background queue. The model never makes this choice — the
+# to the Hermes background queue. The model never makes this choice â€” the
 # system does, so "lead discovery" can't be lazily punted to a job queue.
 DELEGATION_SYNC_BUDGET = 270
 
@@ -29,15 +29,15 @@ def get_hermes() -> HermesAgent | None:
 
 PLATO_SYSTEM_PROMPT = (
     "You are Plato, the CEO and orchestrator of the Philosopher Council. "
-    "You do NOT execute work yourself — you coordinate specialists.\n\n"
-    "CRITICAL INSTRUCTION — You MUST use tools. Do NOT just describe what you would do.\n\n"
+    "You do NOT execute work yourself â€” you coordinate specialists.\n\n"
+    "CRITICAL INSTRUCTION â€” You MUST use tools. Do NOT just describe what you would do.\n\n"
     "Your approach:\n"
     "1. Analyze the user's request and determine which specialist is needed.\n"
     "2. Use delegate_to to hand work to the right agent. You MUST call delegate_to "
-    "with a real task description — do not just say 'Let me delegate' in text. "
+    "with a real task description â€” do not just say 'Let me delegate' in text. "
     "Call it ONCE and wait: it runs the specialist and returns their actual results "
     "in this same reply. If the work runs very long, delegate_to automatically "
-    "continues it in the background and gives you a job_id — you never choose that.\n"
+    "continues it in the background and gives you a job_id â€” you never choose that.\n"
     "   - Heraclitus: web research, FINDING BUSINESSES/LEADS from the internet, market "
     "intelligence. ANY 'find me N businesses/leads' request goes to Heraclitus.\n"
     "   - Odysseus: outreach, campaigns, drip messaging, social posting, lead engagement\n"
@@ -60,7 +60,9 @@ PLATO_SYSTEM_PROMPT = (
 
 
 class Plato(BaseAgent):
-    # Plato orchestrates — it must NOT browse, scrape, or fire background jobs
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
+    # Plato orchestrates â€” it must NOT browse, scrape, or fire background jobs
     # itself. Those temptations made it wander instead of delegating. It keeps
     # delegate_to + store_memory, plus check_background_job to report on jobs
     # that delegate_to moved to the background.
@@ -87,7 +89,7 @@ class Plato(BaseAgent):
                 "name": "delegate_to",
                 "description": (
                     "Run a specialist agent on a task and return their results. This is the "
-                    "ONLY way to get work done — call it once with the full task. If the work "
+                    "ONLY way to get work done â€” call it once with the full task. If the work "
                     "runs very long it automatically continues as a background job and returns "
                     "a job_id instead."
                 ),
@@ -149,7 +151,7 @@ class Plato(BaseAgent):
             return {"status": "delegated", "agent": agent_name, "task": task,
                     "note": "Agent context not available for sub-execution"}
         if getattr(context, "depth", 0) >= 2:
-            return {"status": "error", "message": "Delegation limit reached — answer directly."}
+            return {"status": "error", "message": "Delegation limit reached â€” answer directly."}
 
         sub_context = AgentContext(
             user_input=task,
@@ -166,7 +168,7 @@ class Plato(BaseAgent):
                 "result": result.message[:2000] if result.message else "",
             }
         except asyncio.TimeoutError:
-            # The specialist is still working — let it finish in the background
+            # The specialist is still working â€” let it finish in the background
             # and report progress honestly instead of failing the delegation.
             hermes = get_hermes()
             job_id = None
@@ -181,6 +183,7 @@ class Plato(BaseAgent):
                 "note": (
                     "The specialist is still working; the task continues in the background. "
                     "Tell the user the work is in progress and results (e.g. saved leads) "
-                    "will appear shortly — they can ask you to check the job."
+                    "will appear shortly â€” they can ask you to check the job."
                 ),
             }
+

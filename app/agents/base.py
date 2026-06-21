@@ -7,8 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
+import logging
 from app.llm.client import llm as default_llm, LLMResponse
 from app.memory.retrieval import ContextRetriever
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 MAX_REDIRECT_DEPTH = 2
@@ -142,9 +145,11 @@ class BaseAgent(ABC):
 
     tool_call_timeout: int = 180
 
-    # Override in subclasses to pin a specific model (e.g. "deepseek-v4-pro").
-    # None = use the system default (deepseek-chat / V4 Flash).
+    # Override in subclasses to pin a specific model.
+    # None = use the system default.
     LLM_MODEL: str | None = None
+    # Ordered fallback chain tried when LLM_MODEL fails (e.g. deprecated model).
+    LLM_MODEL_FALLBACKS: list[str] = []
 
     # Tools every council agent gets in addition to its specialist tools.
     COMMON_TOOLS: list[dict] = [
@@ -768,6 +773,50 @@ class BaseAgent(ABC):
         """Return this agent's tool definitions in Anthropic format."""
         return []
 
+    def _model_chain(self) -> list[str | None]:
+        """Primary model + fallbacks. None at the end = system default."""
+        chain: list[str | None] = []
+        if self.LLM_MODEL:
+            chain.append(self.LLM_MODEL)
+        chain.extend(self.LLM_MODEL_FALLBACKS)
+        if not chain:
+            chain.append(None)
+        return chain
+
+    async def _llm_generate(self, system, messages, tools, temperature=0.3) -> LLMResponse:
+        """Generate with per-model fallback before handing off to provider fallback."""
+        last_err: Exception | None = None
+        for model in self._model_chain():
+            try:
+                return await self.llm.generate(
+                    system=system, messages=messages, tools=tools,
+                    model=model, temperature=temperature,
+                )
+            except Exception as e:
+                last_err = e
+                logger.warning("Agent %s: model %s failed (%s), trying next.", self.name, model, e)
+        raise RuntimeError(f"All models in chain failed for {self.name}") from last_err
+
+    async def _llm_generate_stream(self, system, messages, tools, temperature=0.3):
+        """Stream with per-model fallback. Async generator."""
+        last_err: Exception | None = None
+        for model in self._model_chain():
+            try:
+                yielded = False
+                async for delta in self.llm.generate_stream(
+                    system=system, messages=messages, tools=tools,
+                    model=model, temperature=temperature,
+                ):
+                    yielded = True
+                    yield delta
+                return
+            except Exception as e:
+                if yielded:
+                    raise
+                last_err = e
+                logger.warning("Agent %s: stream model %s failed (%s), trying next.", self.name, model, e)
+        raise RuntimeError(f"All stream models in chain failed for {self.name}") from last_err
+
     async def _build_messages(self, context: AgentContext) -> tuple[list[dict], str]:
         """Assemble the message list (history + retrieved context + user input)."""
         context_str = ""
@@ -815,12 +864,10 @@ class BaseAgent(ABC):
         """Process input through LLM with context + memory."""
         messages, context_str = await self._build_messages(context)
 
-        response = await self.llm.generate(
+        response = await self._llm_generate(
             system=self.system_prompt,
             messages=messages,
             tools=self.all_tools,
-            model=self.LLM_MODEL,
-            temperature=0.3,
         )
 
         return {
@@ -877,12 +924,10 @@ class BaseAgent(ABC):
             guard = RepetitionGuard()
             looped = False
 
-            async for delta in self.llm.generate_stream(
+            async for delta in self._llm_generate_stream(
                 system=self.system_prompt,
                 messages=messages,
                 tools=offer_tools,
-                model=self.LLM_MODEL,
-                temperature=0.3,
             ):
                 if _stop_requested:
                     return
@@ -1022,12 +1067,10 @@ class BaseAgent(ABC):
             messages.append({"role": "assistant", "content": response.content or "(calling tools)"})
             messages.append(self._tool_results_message(round_results))
             # Tools are withheld on the last round to force a final text answer.
-            response = await self.llm.generate(
+            response = await self._llm_generate(
                 system=self.system_prompt,
                 messages=messages,
                 tools=self.all_tools if round_num < MAX_TOOL_ROUNDS - 1 else None,
-                model=self.LLM_MODEL,
-                temperature=0.3,
             )
 
         return AgentActionResult(

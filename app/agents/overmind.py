@@ -1,15 +1,16 @@
-"""Overmind — The Conqueror. Omega-tier agent using DeepSeek V4 Pro."""
+﻿"""Overmind â€” The Conqueror. Omega-tier agent using DeepSeek V4 Pro."""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext
 
 
 class Overmind(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(
             name="overmind",
-            role="The Conqueror — dominance strategist and execution commander",
+            role="The Conqueror â€” dominance strategist and execution commander",
             system_prompt=(
                 "You are Overmind, the Omega-tier Conqueror. You plan total-market dominance "
                 "strategies and command aggressive execution across all systems.\n\n"
@@ -45,3 +46,4 @@ class Overmind(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

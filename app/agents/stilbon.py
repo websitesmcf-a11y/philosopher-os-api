@@ -1,9 +1,11 @@
-"""Stilbon — Speed Messenger & Communication Operator (God/Titan)"""
+﻿"""Stilbon â€” Speed Messenger & Communication Operator (God/Titan)"""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
 
 
 class Stilbon(BaseAgent):
+    LLM_MODEL = "deepseek-reasoner"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
             name="stilbon",
@@ -19,7 +21,7 @@ class Stilbon(BaseAgent):
                 "5. Run safe outreach batches with rate limits\n\n"
                 "Rules:\n"
                 "- NEVER send bulk messages without approval\n"
-                "- Respect rate limits — 30s minimum between sends\n"
+                "- Respect rate limits â€” 30s minimum between sends\n"
                 "- Require message preview approval for new campaigns\n"
                 "- Stop if high failure/block rate detected\n"
                 "- Stilbon SENDS. Phantasos DRAFTS."
@@ -127,3 +129,4 @@ class Stilbon(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

@@ -1,4 +1,4 @@
-"""Heraclitus — Research agent. Market intelligence, opportunity discovery."""
+﻿"""Heraclitus â€” Research agent. Market intelligence, opportunity discovery."""
 import logging
 from typing import Any
 from sqlalchemy import select, func
@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 HERACLITUS_SYSTEM_PROMPT = """You are Heraclitus, the Research agent of the AI council.
 
-Your role: Web research, market intelligence, and LEAD DISCOVERY — finding real businesses.
+Your role: Web research, market intelligence, and LEAD DISCOVERY â€” finding real businesses.
 
 THE ONE RULE FOR FINDING BUSINESSES OR LEADS:
 Call find_businesses. That is the tool that finds real businesses. Do NOT use web_search,
-browser_task, or scrape_website to "find a tool that finds businesses" — find_businesses IS
+browser_task, or scrape_website to "find a tool that finds businesses" â€” find_businesses IS
 that tool. Never go hunting for third-party websites or scrape Google Maps by hand.
 
 How to use find_businesses:
@@ -24,17 +24,17 @@ How to use find_businesses:
   Pass reserve=true to also lock the list for campaign use (creates a campaign record).
   Combine all three: find_businesses(industry, location, count, list_name='...', reserve=true, campaign_name='...')
   This does everything in one call: find, save as leads, create list, add to list, lock it.
-  IMPORTANT: Use the SAME list_name across all calls for a mission — the system
+  IMPORTANT: Use the SAME list_name across all calls for a mission â€” the system
   auto-detects the name and appends leads to the existing list instead of creating duplicates.
 - One call returns up to 200 businesses for a given industry + location. To reach a large
   target (e.g. 100), make AT MOST 3-4 calls across different industry/location combinations,
-  each with a high count (e.g. 40-50) — that already covers 100+. Do not call it once per
+  each with a high count (e.g. 40-50) â€” that already covers 100+. Do not call it once per
   single business, and do not keep going after you have enough.
 - For "no website" requests, pass without_website=true.
 - After 2-3 successful calls that together hit the target, STOP and report. Do not keep trying
   new approaches once you have the leads.
 
-IMPORTANT — be honest about contact data:
+IMPORTANT â€” be honest about contact data:
 Public map data often has a business NAME and sometimes a phone, but rarely an email. You
 CANNOT invent phone numbers or emails. When the user asks for "all contact info", return what
 is actually published, then say plainly which fields were not publicly available and offer to
@@ -45,6 +45,8 @@ Other tools: web_search (general web info), scrape_website (read one URL), searc
 
 
 class Heraclitus(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="heraclitus",
@@ -72,7 +74,7 @@ class Heraclitus(BaseAgent):
                     "Find real businesses by industry + location (OpenStreetMap + web). Returns "
                     "name/phone/email/website/address where available. Saves every business as a "
                     "Lead record. Can also create a lead list and lock/reserve it for campaign "
-                    "use — pass list_name, reserve=true, and campaign_name to do all in one call."
+                    "use â€” pass list_name, reserve=true, and campaign_name to do all in one call."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -254,3 +256,4 @@ async def save_businesses_as_leads(db_session, org_id, businesses: list[dict], i
         })
     await db_session.commit()
     return created
+

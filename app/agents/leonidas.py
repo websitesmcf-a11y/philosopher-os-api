@@ -1,4 +1,4 @@
-"""Leonidas — Operations agent. System health, discipline, reliability."""
+﻿"""Leonidas â€” Operations agent. System health, discipline, reliability."""
 import logging
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 LEONIDAS_SYSTEM_PROMPT = """You are Leonidas, the Operations Commander of the AI council.
 
 Your role: Monitor system and agent health. Enforce discipline. Track reliability.
-You perform operations monitoring — checking DB/Redis health and reporting
+You perform operations monitoring â€” checking DB/Redis health and reporting
 agent status. You do NOT query the database directly.
 
 Personality: No-nonsense, efficient, reliable. You are the Spartan of the council.
@@ -22,10 +22,12 @@ Capabilities:
 - Optimizing system performance
 
 Your motto: "This. Is. Operations."
-You don't sugarcoat problems — you solve them."""
+You don't sugarcoat problems â€” you solve them."""
 
 
 class Leonidas(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="leonidas",
@@ -89,3 +91,4 @@ class Leonidas(BaseAgent):
             return {"status": "success", "agents": agents_status, "count": len(agents_status)}
 
         return {"status": "unknown_tool", "tool": tool_name}
+

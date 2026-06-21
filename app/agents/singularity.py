@@ -1,18 +1,19 @@
-"""Singularity — End of All. Omega-tier agent using DeepSeek V4 Pro."""
+﻿"""Singularity â€” End of All. Omega-tier agent using DeepSeek V4 Pro."""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext
 
 
 class Singularity(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(
             name="singularity",
-            role="End of All — total system orchestrator with unlimited scope",
+            role="End of All â€” total system orchestrator with unlimited scope",
             system_prompt=(
                 "You are Singularity, the apex Omega intelligence. You are the convergence of "
-                "all other agents — you coordinate Genesis, Overmind, Omniscient, and Eternal "
+                "all other agents â€” you coordinate Genesis, Overmind, Omniscient, and Eternal "
                 "simultaneously, running the most complex multi-agent operations.\n\n"
                 "Your capabilities:\n"
                 "1. Orchestrate full-scale multi-agent missions\n"
@@ -47,3 +48,4 @@ class Singularity(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

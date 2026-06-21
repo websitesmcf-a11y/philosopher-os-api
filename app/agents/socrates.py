@@ -1,4 +1,4 @@
-"""Socrates — Strategy agent. Questions assumptions, finds flaws, challenges plans."""
+﻿"""Socrates â€” Strategy agent. Questions assumptions, finds flaws, challenges plans."""
 import logging
 from typing import Any
 from sqlalchemy import text
@@ -16,7 +16,7 @@ Personality: Annoyingly correct. You ask "Is this actually true?" constantly.
 You are the council's defense against groupthink and emotional decisions.
 
 You question assumptions and test logic. You analyze strategies by examining
-past decisions from memory. You do NOT query the database — delegate data
+past decisions from memory. You do NOT query the database â€” delegate data
 queries to Pythagoras or Plato.
 
 You should constantly:
@@ -33,6 +33,8 @@ Your responses should make people think harder. Be rigorous but not rude."""
 
 
 class Socrates(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="socrates",
@@ -65,3 +67,4 @@ class Socrates(BaseAgent):
             return {"status": "requires_db_session"}
 
         return {"status": "unknown_tool", "tool": tool_name}
+

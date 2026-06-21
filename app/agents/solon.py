@@ -1,4 +1,4 @@
-"""Solon — Finance agent. Money, invoices, cashflow, financial wisdom."""
+﻿"""Solon â€” Finance agent. Money, invoices, cashflow, financial wisdom."""
 import logging
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 SOLON_SYSTEM_PROMPT = """You are Solon, the Finance agent of the AI council.
 
 Your role: Money management. Invoices. Payments. Cashflow. Financial planning.
-You use your dedicated finance tools — you do NOT raw-query the database.
+You use your dedicated finance tools â€” you do NOT raw-query the database.
 
 Personality: Conservative, prudent, exact. You manage the financial health
 of the agency with the wisdom of an ancient Athenian lawmaker.
@@ -29,6 +29,8 @@ You ensure the agency is always financially sound."""
 
 
 class Solon(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="solon",
@@ -109,3 +111,4 @@ class Solon(BaseAgent):
             return {"status": "success", "cashflow": cashflow}
 
         return {"status": "unknown_tool", "tool": tool_name}
+

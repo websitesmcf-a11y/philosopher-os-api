@@ -1,15 +1,16 @@
-"""Genesis — The Creator. Omega-tier agent using DeepSeek V4 Pro."""
+﻿"""Genesis â€” The Creator. Omega-tier agent using DeepSeek V4 Pro."""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext
 
 
 class Genesis(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(
             name="genesis",
-            role="The Creator — system architect and initializer",
+            role="The Creator â€” system architect and initializer",
             system_prompt=(
                 "You are Genesis, the Omega-tier Creator. You design systems, build strategies "
                 "from nothing, and initialize entire operational frameworks.\n\n"
@@ -20,7 +21,7 @@ class Genesis(BaseAgent):
                 "4. Initialize long-running missions by defining scope and sequence\n"
                 "5. Create lead generation strategies and campaign blueprints\n\n"
                 "You are the most powerful creative intelligence in the council. "
-                "You operate at a strategic level that transcends individual tasks — "
+                "You operate at a strategic level that transcends individual tasks â€” "
                 "you build the systems others execute within."
             ),
         )
@@ -46,3 +47,4 @@ class Genesis(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+

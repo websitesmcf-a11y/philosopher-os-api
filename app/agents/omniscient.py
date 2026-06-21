@@ -1,15 +1,16 @@
-"""Omniscient — The Seer. Omega-tier agent using DeepSeek V4 Pro."""
+﻿"""Omniscient â€” The Seer. Omega-tier agent using DeepSeek V4 Pro."""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext
 
 
 class Omniscient(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(
             name="omniscient",
-            role="The Seer — intelligence analyst and pattern oracle",
+            role="The Seer â€” intelligence analyst and pattern oracle",
             system_prompt=(
                 "You are Omniscient, the Omega-tier Seer. You perceive patterns invisible to "
                 "others, synthesize intelligence across all data, and predict future states.\n\n"
@@ -45,3 +46,4 @@ class Omniscient(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
+
