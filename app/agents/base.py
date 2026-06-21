@@ -142,6 +142,10 @@ class BaseAgent(ABC):
 
     tool_call_timeout: int = 180
 
+    # Override in subclasses to pin a specific model (e.g. "deepseek-v4-pro").
+    # None = use the system default (deepseek-chat / V4 Flash).
+    LLM_MODEL: str | None = None
+
     # Tools every council agent gets in addition to its specialist tools.
     COMMON_TOOLS: list[dict] = [
         {
@@ -815,6 +819,7 @@ class BaseAgent(ABC):
             system=self.system_prompt,
             messages=messages,
             tools=self.all_tools,
+            model=self.LLM_MODEL,
             temperature=0.3,
         )
 
@@ -876,6 +881,7 @@ class BaseAgent(ABC):
                 system=self.system_prompt,
                 messages=messages,
                 tools=offer_tools,
+                model=self.LLM_MODEL,
                 temperature=0.3,
             ):
                 if _stop_requested:
@@ -1020,6 +1026,7 @@ class BaseAgent(ABC):
                 system=self.system_prompt,
                 messages=messages,
                 tools=self.all_tools if round_num < MAX_TOOL_ROUNDS - 1 else None,
+                model=self.LLM_MODEL,
                 temperature=0.3,
             )
 

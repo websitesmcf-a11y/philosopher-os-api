@@ -36,6 +36,11 @@ from app.agents.phantasos import Phantasos
 from app.agents.stilbon import Stilbon
 from app.agents.hermes import HermesAgent
 from app.agents.autopilot import Autopilot
+from app.agents.genesis import Genesis
+from app.agents.overmind import Overmind
+from app.agents.omniscient import Omniscient
+from app.agents.eternal import Eternal
+from app.agents.singularity import Singularity
 from app.routers import autopilot as autopilot_router
 from app.routers import hermes as hermes_router
 from app.routers import beast_mode as beast_mode_router
@@ -75,6 +80,12 @@ async def lifespan(app: FastAPI):
     council.register(Erebos())
     council.register(Phantasos())
     council.register(Stilbon())
+    # Omega-tier agents (DeepSeek V4 Pro)
+    council.register(Genesis())
+    council.register(Overmind())
+    council.register(Omniscient())
+    council.register(Eternal())
+    council.register(Singularity())
     app.state.council = council
     hermes = HermesAgent()
     hermes.council = council
