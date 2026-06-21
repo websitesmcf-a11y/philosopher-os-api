@@ -148,9 +148,15 @@ async def google_calendar_callback(
     request: Request,
     code: str | None = None,
     error: str | None = None,
+    state: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """OAuth callback: exchange the authorization code for tokens."""
+    """OAuth callback: exchange the authorization code for tokens.
+
+    Two flows:
+    - Normal (no state): saves tokens to Calendar integration, redirects to /connections
+    - state=signin: creates/logs in user via Google, redirects to app with JWT
+    """
     if error:
         raise HTTPException(status_code=400, detail=f"Google auth error: {error}")
     if not code:
@@ -170,21 +176,65 @@ async def google_calendar_callback(
 
     redirect_uri = str(request.base_url).rstrip("/").replace("http://", "https://") + "/api/v1/connections/google_calendar/callback"
     try:
-        tokens = await exchange_code(client_id, client_secret, code, redirect_uri)
+        tokens_dict = await exchange_code(client_id, client_secret, code, redirect_uri)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Token exchange failed ({type(e).__name__}): {e} | redirect_uri={redirect_uri}")
 
-    if "access_token" not in tokens:
-        raise HTTPException(status_code=400, detail=f"No access_token in Google response: {tokens}")
+    if "access_token" not in tokens_dict:
+        raise HTTPException(status_code=400, detail=f"No access_token in Google response: {tokens_dict}")
 
+    # ─── Sign-in flow (state=signin) ───────────────────────────────────
+    if state == "signin":
+        import uuid
+        from app.database.models import User, OrgMember
+
+        # Get user info from Google
+        import httpx
+        async with httpx.AsyncClient() as client:
+            userinfo_resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {tokens_dict['access_token']}"},
+            )
+            if userinfo_resp.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to get user info")
+            userinfo = userinfo_resp.json()
+
+        google_email = userinfo.get("email", "")
+        google_name = userinfo.get("name", google_email.split("@")[0])
+        google_id = userinfo.get("id", "")
+
+        if not google_email:
+            raise HTTPException(status_code=400, detail="Email not provided by Google")
+
+        # Find or create user
+        existing = await db.execute(select(User).where(User.email == google_email))
+        user = existing.scalar_one_or_none()
+
+        if not user:
+            dev_org_id = "00000000-0000-0000-0000-000000000001"
+            user_id = uuid.uuid4()
+            user = User(
+                id=user_id, email=google_email, name=google_name,
+                clerk_id=f"google_{google_id}", avatar_url=userinfo.get("picture", ""),
+            )
+            db.add(user)
+            org_member = OrgMember(org_id=dev_org_id, user_id=user_id, role="member")
+            db.add(org_member)
+            await db.flush()
+            await db.commit()
+
+        # Issue JWT
+        from app.routers.auth import _issue_local_token
+        token = _issue_local_token(google_email, user.name or "User")
+        return RedirectResponse(url=f"https://philosopher-os.vercel.app/login?token={token}&name={user.name}&email={google_email}")
+
+    # ─── Normal Calendar auth flow ─────────────────────────────────────
     new_secrets = {
         "client_id": client_id,
         "client_secret": client_secret,
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens.get("refresh_token", ""),
-        "expires_at": (
-            datetime.utcnow().isoformat() + "Z"
-        ),
+        "access_token": tokens_dict["access_token"],
+        "refresh_token": tokens_dict.get("refresh_token", ""),
+        "expires_at": datetime.utcnow().isoformat() + "Z",
     }
     row.credentials_enc = encrypt_dict(new_secrets)
     row.status = "connected"

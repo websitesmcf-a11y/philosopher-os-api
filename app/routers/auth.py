@@ -590,24 +590,34 @@ async def google_auth_url(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get Google OAuth URL for sign-in/sign-up."""
+    """Get Google OAuth URL for sign-in/sign-up.
+
+    Uses the EXACT same redirect_uri as the Calendar integration
+    (already registered in Google Cloud Console), with state=signin
+    to differentiate the flow.
+    """
     from app.database.models import Integration as IntModel
     from urllib.parse import urlencode
     from app.integrations.google_calendar import AUTH_URL
+    from app.core.crypto import decrypt_dict
 
     # Get client_id from the saved Google Calendar integration
     result = await db.execute(
         select(IntModel).where(IntModel.provider == "google_calendar")
     )
     row = result.scalar_one_or_none()
-    client_id = ""
-    if row:
-        # client_id is stored in plain config (not encrypted)
-        client_id = (row.config or {}).get("client_id", "")
-    if not client_id:
+    if not row:
         raise HTTPException(status_code=400, detail="Google OAuth not configured — save Calendar credentials in Connections first")
 
-    redirect_uri = str(request.base_url).replace("http://", "https://").rstrip("/") + "/api/v1/auth/google/callback"
+    secrets = decrypt_dict(row.credentials_enc or "")
+    client_id = secrets.get("client_id") or (row.config or {}).get("client_id", "")
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Client ID not found in saved credentials")
+
+    # Use the SAME redirect URI as the Calendar callback (already registered in Google Cloud Console)
+    base = str(request.base_url).replace("http://", "https://").rstrip("/")
+    redirect_uri = base.replace("/api/v1/auth", "/api/v1/connections") + "/google_calendar/callback"
+
     auth_url = f"{AUTH_URL}?" + urlencode({
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -615,141 +625,6 @@ async def google_auth_url(
         "scope": "openid email profile https://www.googleapis.com/auth/calendar",
         "access_type": "offline",
         "prompt": "consent",
+        "state": "signin",
     })
     return {"auth_url": auth_url, "redirect_uri": redirect_uri}
-
-
-@router.get("/google/callback")
-async def google_auth_callback(
-    request: Request,
-    code: str = "",
-    error: str = "",
-    db: AsyncSession = Depends(get_db),
-):
-    """Handle Google OAuth callback — creates user or logs them in."""
-    import uuid, secrets as token_lib
-
-    if error:
-        raise HTTPException(status_code=400, detail=f"Google auth error: {error}")
-
-    if not code:
-        raise HTTPException(status_code=400, detail="No authorization code provided")
-
-    # Exchange code for tokens
-    from app.database.models import Integration as IntModel
-
-    result = await db.execute(
-        select(IntModel).where(IntModel.provider == "google_calendar")
-    )
-    row = result.scalar_one_or_none()
-    if not row:
-        raise HTTPException(status_code=400, detail="Google Calendar integration not configured")
-
-    secrets = row.credentials_enc or {}
-    client_id = secrets.get("client_id") or (row.config or {}).get("client_id", "")
-    client_secret = secrets.get("client_secret") or ""
-
-    if not client_id or not client_secret:
-        # Try settings
-        client_id = settings.google_client_id or client_id
-        client_secret = settings.google_client_secret or client_secret
-
-    redirect_uri = str(request.base_url).replace("http://", "https://").rstrip("/")
-
-    # Exchange the code using httpx
-    import httpx
-    token_url = "https://oauth2.googleapis.com/token"
-    token_data = {
-        "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uri": redirect_uri,
-        "grant_type": "authorization_code",
-    }
-
-    async with httpx.AsyncClient() as client:
-        token_resp = await client.post(token_url, data=token_data)
-        if token_resp.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Token exchange failed: {token_resp.text}")
-        tokens = token_resp.json()
-
-    id_token = tokens.get("id_token", "")
-    access_token = tokens.get("access_token", "")
-
-    if not id_token and not access_token:
-        raise HTTPException(status_code=400, detail="No tokens returned from Google")
-
-    # Get user info from Google
-    if access_token:
-        async with httpx.AsyncClient() as client:
-            userinfo_resp = await client.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            if userinfo_resp.status_code != 200:
-                raise HTTPException(status_code=400, detail="Failed to get user info")
-            userinfo = userinfo_resp.json()
-    else:
-        # Decode id_token (JWT) — simple decode without verification for flow
-        import base64, json
-        parts = id_token.split(".")
-        if len(parts) == 3:
-            padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-            try:
-                userinfo = json.loads(base64.urlsafe_b64decode(padded))
-            except Exception:
-                raise HTTPException(status_code=400, detail="Failed to decode ID token")
-        else:
-            raise HTTPException(status_code=400, detail="Invalid ID token")
-
-    google_email = userinfo.get("email", "")
-    google_name = userinfo.get("name", google_email.split("@")[0])
-    google_id = userinfo.get("id", "")
-
-    if not google_email:
-        raise HTTPException(status_code=400, detail="Email not provided by Google")
-
-    # Find or create user
-    from app.database.models import User, OrgMember
-
-    existing = await db.execute(select(User).where(User.email == google_email))
-    user = existing.scalar_one_or_none()
-
-    if user:
-        # Existing user — log them in
-        token = _issue_local_token(google_email, user.name or "User")
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "user": {"id": str(user.id), "email": user.email, "name": user.name},
-        }
-
-    # New user — create account
-    dev_org_id = "00000000-0000-0000-0000-000000000001"
-    user_id = uuid.uuid4()
-
-    user = User(
-        id=user_id,
-        email=google_email,
-        name=google_name,
-        clerk_id=f"google_{google_id}",
-        avatar_url=userinfo.get("picture", ""),
-    )
-    db.add(user)
-
-    org_member = OrgMember(
-        org_id=dev_org_id,
-        user_id=user_id,
-        role="member",
-    )
-    db.add(org_member)
-    await db.flush()
-    await db.commit()
-
-    token = _issue_local_token(google_email, google_name)
-
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {"id": str(user.id), "email": user.email, "name": user.name},
-    }
