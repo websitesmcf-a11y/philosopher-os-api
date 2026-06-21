@@ -138,7 +138,7 @@ async def google_calendar_auth_url(request: Request, db: AsyncSession = Depends(
     client_id = secrets.get("client_id") or (row.config or {}).get("client_id", "")
     if not client_id:
         raise HTTPException(status_code=400, detail="Client ID not found — save credentials first")
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/v1/connections/google_calendar/callback"
+    redirect_uri = str(request.base_url).rstrip("/").replace("http://", "https://") + "/api/v1/connections/google_calendar/callback"
     url = build_auth_url(client_id, redirect_uri)
     return {"auth_url": url, "redirect_uri": redirect_uri}
 
@@ -168,7 +168,7 @@ async def google_calendar_callback(
     if not client_id or not client_secret:
         raise HTTPException(status_code=400, detail="Client credentials missing — save them first")
 
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/v1/connections/google_calendar/callback"
+    redirect_uri = str(request.base_url).rstrip("/").replace("http://", "https://") + "/api/v1/connections/google_calendar/callback"
     tokens = await exchange_code(client_id, client_secret, code, redirect_uri)
 
     new_secrets = {
