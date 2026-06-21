@@ -1,4 +1,4 @@
-"""Iapetus — Master Workflow & Lead Generation Executor (God/Titan)
+﻿"""Iapetus â€” Master Workflow & Lead Generation Executor (God/Titan)
 
 Actually finds businesses via Google Maps (browser harness) or OpenStreetMap
 fallback, then saves them as Leads in the database with proper deduplication.
@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class Iapetus(BaseAgent):
+    LLM_MODEL = "deepseek-reasoner"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
             name="iapetus",
@@ -49,7 +51,7 @@ class Iapetus(BaseAgent):
                         "location": {"type": "string", "description": "City or suburb to search. Leave empty for batch mode."},
                         "count": {"type": "integer", "description": "Number of leads to aim for (max 300)", "default": 100},
                         "without_website": {"type": "boolean", "description": "Only return businesses with no website", "default": True},
-                        "objective": {"type": "string", "description": "Full objective text for batch mode — parses industries and cities automatically"},
+                        "objective": {"type": "string", "description": "Full objective text for batch mode â€” parses industries and cities automatically"},
                     },
                 },
             },
@@ -67,7 +69,7 @@ class Iapetus(BaseAgent):
             },
         ]
 
-    # Known business categories for batch mode — each key is matched
+    # Known business categories for batch mode â€” each key is matched
     # against the objective text so Iapetus can plan a multi-search run.
     LEAD_INDUSTRIES = [
         "plumber", "electrician", "builder", "carpenter", "painter", "roofer",
@@ -133,37 +135,40 @@ class Iapetus(BaseAgent):
                         if cleaned["confidence"] not in ("invalid",):
                             phone_clean = cleaned.get("cleaned") or phone_raw
 
-                    # Dedup by phone
-                    if phone_clean:
+                    # Each lead gets its own savepoint so a failure doesn't
+                    # roll back previous saves or corrupt the session.
+                    async with db.begin_nested():
+                        # Dedup by phone
+                        if phone_clean:
+                            existing = await db.execute(
+                                select(Lead).where(Lead.phone == phone_clean)
+                            )
+                            if existing.scalar_one_or_none():
+                                skipped += 1
+                                continue
+
+                        # Dedup by name
                         existing = await db.execute(
-                            select(Lead).where(Lead.phone == phone_clean)
+                            select(Lead).where(
+                                Lead.name == name,
+                                Lead.industry == industry,
+                            )
                         )
                         if existing.scalar_one_or_none():
                             skipped += 1
                             continue
 
-                    # Dedup by name
-                    existing = await db.execute(
-                        select(Lead).where(
-                            Lead.name == name,
-                            Lead.industry == industry,
+                        lead = Lead(
+                            name=name,
+                            phone=phone_clean or None,
+                            email=biz.get("email") or None,
+                            company=name,
+                            industry=industry,
+                            source=source,
+                            status="new",
                         )
-                    )
-                    if existing.scalar_one_or_none():
-                        skipped += 1
-                        continue
-
-                    lead = Lead(
-                        name=name,
-                        phone=phone_clean or None,
-                        email=biz.get("email") or None,
-                        company=name,
-                        industry=industry,
-                        source=source,
-                        status="new",
-                    )
-                    db.add(lead)
-                    saved += 1
+                        db.add(lead)
+                        saved += 1
                 except Exception as e:
                     logger.warning(f"Iapetus save error: {e}")
                     skipped += 1
@@ -187,7 +192,7 @@ class Iapetus(BaseAgent):
         count = min(int(args.get("count", 50)), 300)
         without_website = args.get("without_website", True)
 
-        # ── Batch mode: parse industries and cities from objective ──────
+        # â”€â”€ Batch mode: parse industries and cities from objective â”€â”€â”€â”€â”€â”€
         objective = args.get("objective") or ""
         if (not industry or not location) and objective:
             # Extract mentioned industries from the objective
@@ -242,7 +247,7 @@ class Iapetus(BaseAgent):
                 "results": results,
             }
 
-        # ── Single mode ────────────────────────────────────────────────
+        # â”€â”€ Single mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if not industry or not location:
             return {"status": "error", "message": "industry and location are required (or provide an objective)"}
 
@@ -273,3 +278,4 @@ class Iapetus(BaseAgent):
             "skipped": r["skipped"],
             "source": r.get("source", ""),
         }
+

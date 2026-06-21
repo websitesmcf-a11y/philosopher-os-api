@@ -1,0 +1,33 @@
+INFO:     Started server process [33316]
+INFO:     Waiting for application startup.
+{"timestamp": "2026-06-20 23:09:35,608", "level": "INFO", "logger": "app.database.session", "message": "Database schema ensured (create_all)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,631", "level": "WARNING", "logger": "app.database.session", "message": "Could not seed default organization: (sqlite3.IntegrityError) UNIQUE constraint failed: organizations.slug\n[SQL: INSERT INTO organizations (id, name, slug, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)]\n[parameters: ('00000000000000000000000000000001', 'Default Org', 'default', '{}', '2026-06-20 21:09:35.628903', '2026-06-20 21:09:35.628907')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,674", "level": "INFO", "logger": "app.services.connection_service", "message": "Applied saved connection: deepseek", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: plato (CEO & Strategic Leader)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: socrates (Strategy Critic & Assumption Challenger)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: aristotle (Knowledge Keeper & Memory Engine)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: leonidas (Operations Commander)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: athena (Executive Assistant)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: heraclitus (Research & Market Intelligence)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: pythagoras (Analytics & Forecasting)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,676", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: solon (Finance & Treasury)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: archimedes (Engineering & Infrastructure)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: odysseus (Outreach & Communications)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: iapetus (Master Workflow & Lead Generation)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: astraeus (Market Intelligence & Opportunity Detection)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: erebos (Data Cleanup & Risk Recovery)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: phantasos (Creative Outreach & Personalization)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: stilbon (Speed Messenger & Communication)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: genesis (The Creator)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: overmind (The Conqueror)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: omniscient (The Seer)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: eternal (The Constant)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,677", "level": "INFO", "logger": "app.agents.council", "message": "Registered agent: singularity (The End of All)", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,760", "level": "INFO", "logger": "app.agents.hermes", "message": "Hermes: loaded 0 jobs from DB", "request_id": "-"}
+{"timestamp": "2026-06-20 23:09:35,761", "level": "INFO", "logger": "app.services.scheduler", "message": "Job scheduler started (poll every 20s)", "request_id": "-"}
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+{"timestamp": "2026-06-20 23:09:40,987", "level": "WARNING", "logger": "app.core.rate_limit", "message": "Rate limiter: Redis unavailable, falling back to in-memory", "request_id": "0df59ca4"}
+INFO:     127.0.0.1:51913 - "GET /health HTTP/1.1" 404 Not Found
+{"timestamp": "2026-06-20 23:09:53,807", "level": "WARNING", "logger": "app.core.rate_limit", "message": "Rate limiter: Redis unavailable, falling back to in-memory", "request_id": "e65ed8e0"}
+INFO:     127.0.0.1:51922 - "GET /health HTTP/1.1" 404 Not Found

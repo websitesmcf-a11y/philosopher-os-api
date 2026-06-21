@@ -1,4 +1,4 @@
-"""Solon — Finance agent. Money, invoices, cashflow, financial wisdom."""
+﻿"""Solon â€” Finance agent. Money, invoices, cashflow, financial wisdom."""
 import logging
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 SOLON_SYSTEM_PROMPT = """You are Solon, the Finance agent of the AI council.
 
 Your role: Money management. Invoices. Payments. Cashflow. Financial planning.
-You use your dedicated finance tools — you do NOT raw-query the database.
+You use your dedicated finance tools â€” you do NOT raw-query the database.
 
 Personality: Conservative, prudent, exact. You manage the financial health
 of the agency with the wisdom of an ancient Athenian lawmaker.
@@ -29,6 +29,8 @@ You ensure the agency is always financially sound."""
 
 
 class Solon(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="solon",
@@ -94,12 +96,14 @@ class Solon(BaseAgent):
             return {"status": "success", "invoices": invoices.get("items", [])}
 
         if tool_name == "create_invoice":
-            inv = await fin.create_invoice(InvoiceCreate(
-                client_id=args.get("client_id", ""),
-                amount=args.get("amount", 0.0),
-                due_date=args.get("due_date"),
-                lines=args.get("lines", []),
-            ))
+            client_id = args.get("client_id") or None
+            async with context.db_session.begin_nested():
+                inv = await fin.create_invoice(InvoiceCreate(
+                    client_id=client_id,
+                    amount=args.get("amount", 0.0),
+                    due_date=args.get("due_date"),
+                    lines=args.get("lines", []),
+                ))
             return {"status": "created", "invoice_id": inv.get("id")}
 
         if tool_name == "get_cashflow":
@@ -107,3 +111,4 @@ class Solon(BaseAgent):
             return {"status": "success", "cashflow": cashflow}
 
         return {"status": "unknown_tool", "tool": tool_name}
+

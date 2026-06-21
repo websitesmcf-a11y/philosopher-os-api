@@ -1,4 +1,4 @@
-"""Aristotle — Knowledge agent. Memory keeper, truth maintainer, context engine."""
+﻿"""Aristotle â€” Knowledge agent. Memory keeper, truth maintainer, context engine."""
 import logging
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
@@ -23,11 +23,13 @@ Capabilities:
 - Pruning outdated or irrelevant information
 - Connecting related facts across different domains
 
-You ensure no context is ever truly lost. You manage the knowledge base —
+You ensure no context is ever truly lost. You manage the knowledge base â€”
 when someone asks "what do we know about X", you retrieve everything relevant."""
 
 
 class Aristotle(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="aristotle",
@@ -132,3 +134,4 @@ class Aristotle(BaseAgent):
             return {"status": "stored", "knowledge_id": entry.get("id")}
 
         return {"status": "unknown_tool", "tool": tool_name}
+

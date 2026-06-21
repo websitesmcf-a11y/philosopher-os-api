@@ -4,7 +4,7 @@ from datetime import datetime, date
 
 
 class InvoiceCreate(BaseModel):
-    client_id: str
+    client_id: Optional[str] = None
     amount: float
     currency: str = "USD"
     due_date: Optional[date] = None

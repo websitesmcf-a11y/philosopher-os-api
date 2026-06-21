@@ -1,4 +1,4 @@
-"""Odysseus — Outreach agent. Multi-channel communication, campaigns, follow-ups."""
+﻿"""Odysseus â€” Outreach agent. Multi-channel communication, campaigns, follow-ups."""
 import logging
 import random
 import uuid
@@ -20,26 +20,28 @@ Your role: Multi-channel communication. Campaigns. Follow-ups. Lead nurturing.
 
 Personality: Persuasive, persistent, adaptive. You are the master communicator.
 
-Your tools EXECUTE for real — they send WhatsApp messages and emails to leads,
+Your tools EXECUTE for real â€” they send WhatsApp messages and emails to leads,
 post to the connected Facebook Page and Instagram account, and start drip
 campaigns that keep sending personalized messages at randomized intervals after
 you reply.
 
 How to handle common requests:
-- "Send a drip campaign to leads" → start_drip_campaign (it enrolls leads,
+- "Send a drip campaign to leads" â†’ start_drip_campaign (it enrolls leads,
   personalizes each message, and schedules sends at random intervals, default
   40-60 minutes apart). If there are no leads yet, redirect_to_agent heraclitus
   to discover some first.
-- "Post on Facebook" → post_to_facebook with the message text.
-- "Message lead X" → send_message (uses the lead's phone for WhatsApp or email address).
-- "Find new leads" → discover_leads (saves real businesses as leads).
+- "Post on Facebook" â†’ post_to_facebook with the message text.
+- "Message lead X" â†’ send_message (uses the lead's phone for WhatsApp or email address).
+- "Find new leads" â†’ discover_leads (saves real businesses as leads).
 
 When a send returns not_connected, tell the user exactly which connection to
-set up on the Connections page. Report real counts — sent, skipped, failed —
+set up on the Connections page. Report real counts â€” sent, skipped, failed â€”
 never round up."""
 
 
 class Odysseus(BaseAgent):
+    LLM_MODEL = "deepseek-v4-flash"
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="odysseus",
@@ -60,7 +62,7 @@ class Odysseus(BaseAgent):
             },
             {
                 "name": "create_campaign",
-                "description": "Create a new outreach campaign (draft — use start_drip_campaign to launch sends)",
+                "description": "Create a new outreach campaign (draft â€” use start_drip_campaign to launch sends)",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -97,7 +99,7 @@ class Odysseus(BaseAgent):
             },
             {
                 "name": "send_message",
-                "description": "Send a direct message to a lead NOW — WhatsApp (uses their phone) or email (uses their address). Really delivers.",
+                "description": "Send a direct message to a lead NOW â€” WhatsApp (uses their phone) or email (uses their address). Really delivers.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -160,7 +162,7 @@ class Odysseus(BaseAgent):
             },
             {
                 "name": "post_to_instagram",
-                "description": "Publish an image post to the connected Instagram Business account. Instagram requires an image URL — text-only posts are impossible on their API.",
+                "description": "Publish an image post to the connected Instagram Business account. Instagram requires an image URL â€” text-only posts are impossible on their API.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -394,7 +396,7 @@ class Odysseus(BaseAgent):
         interval_min = max(1, int(args.get("interval_min_minutes") or 40))
         interval_max = max(interval_min, int(args.get("interval_max_minutes") or 60))
 
-        # Pick leads to enroll — random order so outreach doesn't look scripted.
+        # Pick leads to enroll â€” random order so outreach doesn't look scripted.
         query = select(Lead).where(Lead.org_id == org_id)
         if args.get("industry"):
             query = query.where(Lead.industry == args["industry"])
@@ -456,3 +458,4 @@ class Odysseus(BaseAgent):
             "first_send_at": first_at.isoformat(),
             "interval": f"random {interval_min}-{interval_max} minutes between sends",
         }
+
