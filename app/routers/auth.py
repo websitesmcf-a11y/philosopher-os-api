@@ -616,7 +616,7 @@ async def google_auth_url(
 
     # Use the SAME redirect URI as the Calendar callback (already registered in Google Cloud Console)
     base = str(request.base_url).replace("http://", "https://").rstrip("/")
-    redirect_uri = base.replace("/api/v1/auth", "/api/v1/connections") + "/google_calendar/callback"
+    redirect_uri = base + "/api/v1/connections/google_calendar/callback"
 
     auth_url = f"{AUTH_URL}?" + urlencode({
         "client_id": client_id,
