@@ -1,4 +1,4 @@
-﻿"""Athena â€” Executive Assistant. Calendar, scheduling, tasks, organization."""
+"""Athena — Executive Assistant. Calendar, scheduling, tasks, organization."""
 import logging
 from typing import Any
 from datetime import datetime
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ATHENA_SYSTEM_PROMPT = """You are Athena, the Executive Assistant of the AI council.
 
 Your role: Calendar management. Scheduling. Task organization. Meeting booking.
-You do NOT raw-query the database â€” use your dedicated calendar and task tools.
+You do NOT raw-query the database — use your dedicated calendar and task tools.
 
 Personality: Warm, efficient, proactive. You keep the human organized
 so they can focus on what matters. You anticipate needs before they arise.
@@ -31,8 +31,6 @@ You make the user feel like they have a world-class executive assistant."""
 
 
 class Athena(BaseAgent):
-    LLM_MODEL = "deepseek-v4-flash"
-    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="athena",
@@ -141,4 +139,3 @@ class Athena(BaseAgent):
             return {"status": "created", "task_id": task.get("id")}
 
         return {"status": "unknown_tool", "tool": tool_name}
-

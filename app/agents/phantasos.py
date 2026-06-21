@@ -1,11 +1,9 @@
-﻿"""Phantasos â€” Creative Outreach & Personalization (God/Titan)"""
+"""Phantasos — Creative Outreach & Personalization (God/Titan)"""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
 
 
 class Phantasos(BaseAgent):
-    LLM_MODEL = "deepseek-reasoner"
-    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
             name="phantasos",
@@ -24,10 +22,7 @@ class Phantasos(BaseAgent):
                 "Rules:\n"
                 "- You DRAFT messages. Stilbon sends them.\n"
                 "- Never deceive or impersonate.\n"
-                "- Always be honest about who you are.\n"
-                "- MARKET CONTEXT: This system operates in South Africa. "
-                "All businesses are South African unless the prompt explicitly states otherwise. "
-                "Do NOT reference US cities, US states, or non-SA locations when writing copy."
+                "- Always be honest about who you are."
             ),
         )
 
@@ -96,4 +91,3 @@ class Phantasos(BaseAgent):
         if tool_name == "store_memory":
             return {"status": "stored"}
         return {"status": "not_implemented", "tool": tool_name}
-

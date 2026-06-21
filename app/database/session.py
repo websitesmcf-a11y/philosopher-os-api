@@ -1,7 +1,6 @@
 import logging
 from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.pool import NullPool
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,14 +16,7 @@ DATABASE_URL = settings.supabase_db_url or f"sqlite+aiosqlite:///{_sqlite_path}"
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
 if IS_SQLITE:
-    # NullPool: fresh connection per session, never reused.
-    # Prevents a failed transaction on one request from tainting the next.
-    engine = create_async_engine(
-        DATABASE_URL,
-        echo=False,
-        poolclass=NullPool,
-        connect_args={"timeout": 30, "check_same_thread": False},
-    )
+    engine = create_async_engine(DATABASE_URL, echo=False)
     logger.info(f"Database: SQLite fallback at {_sqlite_path}")
 else:
     engine = create_async_engine(
@@ -48,9 +40,6 @@ async def init_db() -> None:
     from sqlalchemy import text
 
     async with engine.begin() as conn:
-        if IS_SQLITE:
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
-            await conn.execute(text("PRAGMA busy_timeout=30000"))
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database schema ensured (create_all)")
 

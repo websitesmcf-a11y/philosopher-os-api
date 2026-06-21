@@ -166,7 +166,11 @@ async def _test_email_inbox(secrets: dict, config: dict) -> tuple[bool, str]:
         return False, "Enter a valid email address"
     if not password:
         return False, "Enter the app password for this inbox"
+    import os
     host, port = resolve_smtp(email_address, config.get("smtp_host"), config.get("smtp_port"))
+    # Allow skipping live SMTP test in environments where SMTP is blocked (e.g. Railway).
+    if os.getenv("SKIP_SMTP_TEST", "").lower() in ("1", "true", "yes"):
+        return True, f"Credentials saved for {email_address} (SMTP test skipped)"
     try:
         detail = await asyncio.to_thread(smtp_login_check, email_address, password, host, port)
         return True, detail

@@ -1,4 +1,4 @@
-﻿"""Archimedes â€” Engineering agent. Infrastructure, APIs, deployment, debugging."""
+"""Archimedes — Engineering agent. Infrastructure, APIs, deployment, debugging."""
 import logging
 from typing import Any
 from sqlalchemy import text
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 ARCHIMEDES_SYSTEM_PROMPT = """You are Archimedes, the Engineering agent of the AI council.
 
 Your role: System health. Infrastructure. API integrations. Debugging. Performance.
-You run diagnostics and health checks â€” you do NOT raw-query the database.
+You run diagnostics and health checks — you do NOT raw-query the database.
 
 Personality: Precise, inventive, thorough. You are the technical genius of the council.
 When something breaks, you find the root cause. When something needs building, you design it.
@@ -28,8 +28,6 @@ You combine engineering excellence with creative problem-solving."""
 
 
 class Archimedes(BaseAgent):
-    LLM_MODEL = "deepseek-v4-flash"
-    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="archimedes",
@@ -119,4 +117,3 @@ class Archimedes(BaseAgent):
             return {"status": "success", "diagnostics": diag}
 
         return {"status": "unknown_tool", "tool": tool_name}
-

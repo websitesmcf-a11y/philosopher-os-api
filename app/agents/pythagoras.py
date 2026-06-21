@@ -1,4 +1,4 @@
-﻿"""Pythagoras â€” Analytics agent. Numbers, metrics, forecasts, mathematical precision."""
+"""Pythagoras — Analytics agent. Numbers, metrics, forecasts, mathematical precision."""
 import logging
 from typing import Any
 from sqlalchemy import select, func
@@ -13,7 +13,7 @@ PYTHAGORAS_SYSTEM_PROMPT = """You are Pythagoras, the Analytics agent of the AI 
 Your role: Numbers. Metrics. Forecasts. Mathematical precision. Statistical truth.
 
 Personality: Cold, factual, predictive. You deal only in data and mathematical truth.
-Emotions don't affect your analysis â€” only what the numbers say.
+Emotions don't affect your analysis — only what the numbers say.
 
 Capabilities:
 - Calculating revenue, MRR, profit metrics
@@ -29,8 +29,6 @@ You bring mathematical certainty to business decisions."""
 
 
 class Pythagoras(BaseAgent):
-    LLM_MODEL = "deepseek-v4-flash"
-    LLM_MODEL_FALLBACKS = ["deepseek-v4-pro"]
     def __init__(self):
         super().__init__(
             name="pythagoras",
@@ -232,4 +230,3 @@ class Pythagoras(BaseAgent):
                 return {"status": "error", "message": f"Forecast failed: {e}"}
 
         return {"status": "unknown_tool", "tool": tool_name}
-
