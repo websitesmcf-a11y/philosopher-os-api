@@ -618,13 +618,22 @@ class BaseAgent(ABC):
             if context and context.db_session and context.org_id:
                 from app.database.models import Lead
                 org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                from app.services.lead_cleaner import clean_phone
                 for biz in businesses:
                     lead_id = _uuid.uuid4()
+                    raw_phone = str(biz.get("phone", "")) if biz.get("phone") else ""
+                    cleaned_phone = ""
+                    if raw_phone:
+                        result = clean_phone(raw_phone)
+                        if result["confidence"] not in ("invalid",):
+                            cleaned_phone = result.get("cleaned") or raw_phone
+                        else:
+                            cleaned_phone = raw_phone
                     lead = Lead(
                         id=lead_id,
                         org_id=org_uuid,
                         name=str(biz.get("name", "Unknown"))[:255],
-                        phone=str(biz.get("phone", "")) if biz.get("phone") else None,
+                        phone=cleaned_phone or None,
                         email=str(biz.get("email", "")) if biz.get("email") else None,
                         company=str(biz.get("name", ""))[:255],
                         industry=industry,
@@ -737,12 +746,17 @@ class BaseAgent(ABC):
     def __init__(self, name: str, role: str, system_prompt: str):
         self.name = name
         self.role = role
-        self.system_prompt = system_prompt + self.EXECUTION_RULE
+        self._base_system_prompt = system_prompt + self.EXECUTION_RULE
         self.tasks_completed = 0
         self.tasks_failed = 0
         self.llm = default_llm
         self.council = None  # set by CouncilOrchestrator.register()
         self._tools: list[dict] = []
+
+    @property
+    def system_prompt(self) -> str:
+        today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
+        return self._base_system_prompt + f"\n8. TODAY'S DATE: {today}. Use this for ALL date and scheduling calculations — never guess the year."
 
     @property
     @abstractmethod

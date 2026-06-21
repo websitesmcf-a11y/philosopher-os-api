@@ -76,5 +76,5 @@ def setup_error_handlers(app: FastAPI) -> None:
             pass
         return JSONResponse(
             status_code=500,
-            content={"error": "internal_error", "message": "An unexpected error occurred"},
+            content={"error": "internal_error", "message": str(exc)},
         )

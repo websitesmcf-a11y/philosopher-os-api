@@ -94,12 +94,14 @@ class Solon(BaseAgent):
             return {"status": "success", "invoices": invoices.get("items", [])}
 
         if tool_name == "create_invoice":
-            inv = await fin.create_invoice(InvoiceCreate(
-                client_id=args.get("client_id", ""),
-                amount=args.get("amount", 0.0),
-                due_date=args.get("due_date"),
-                lines=args.get("lines", []),
-            ))
+            client_id = args.get("client_id") or None
+            async with context.db_session.begin_nested():
+                inv = await fin.create_invoice(InvoiceCreate(
+                    client_id=client_id,
+                    amount=args.get("amount", 0.0),
+                    due_date=args.get("due_date"),
+                    lines=args.get("lines", []),
+                ))
             return {"status": "created", "invoice_id": inv.get("id")}
 
         if tool_name == "get_cashflow":

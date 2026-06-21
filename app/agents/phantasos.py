@@ -22,7 +22,10 @@ class Phantasos(BaseAgent):
                 "Rules:\n"
                 "- You DRAFT messages. Stilbon sends them.\n"
                 "- Never deceive or impersonate.\n"
-                "- Always be honest about who you are."
+                "- Always be honest about who you are.\n"
+                "- MARKET CONTEXT: This system operates in South Africa. "
+                "All businesses are South African unless the prompt explicitly states otherwise. "
+                "Do NOT reference US cities, US states, or non-SA locations when writing copy."
             ),
         )
 

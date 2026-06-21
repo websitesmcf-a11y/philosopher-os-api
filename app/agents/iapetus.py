@@ -133,37 +133,40 @@ class Iapetus(BaseAgent):
                         if cleaned["confidence"] not in ("invalid",):
                             phone_clean = cleaned.get("cleaned") or phone_raw
 
-                    # Dedup by phone
-                    if phone_clean:
+                    # Each lead gets its own savepoint so a failure doesn't
+                    # roll back previous saves or corrupt the session.
+                    async with db.begin_nested():
+                        # Dedup by phone
+                        if phone_clean:
+                            existing = await db.execute(
+                                select(Lead).where(Lead.phone == phone_clean)
+                            )
+                            if existing.scalar_one_or_none():
+                                skipped += 1
+                                continue
+
+                        # Dedup by name
                         existing = await db.execute(
-                            select(Lead).where(Lead.phone == phone_clean)
+                            select(Lead).where(
+                                Lead.name == name,
+                                Lead.industry == industry,
+                            )
                         )
                         if existing.scalar_one_or_none():
                             skipped += 1
                             continue
 
-                    # Dedup by name
-                    existing = await db.execute(
-                        select(Lead).where(
-                            Lead.name == name,
-                            Lead.industry == industry,
+                        lead = Lead(
+                            name=name,
+                            phone=phone_clean or None,
+                            email=biz.get("email") or None,
+                            company=name,
+                            industry=industry,
+                            source=source,
+                            status="new",
                         )
-                    )
-                    if existing.scalar_one_or_none():
-                        skipped += 1
-                        continue
-
-                    lead = Lead(
-                        name=name,
-                        phone=phone_clean or None,
-                        email=biz.get("email") or None,
-                        company=name,
-                        industry=industry,
-                        source=source,
-                        status="new",
-                    )
-                    db.add(lead)
-                    saved += 1
+                        db.add(lead)
+                        saved += 1
                 except Exception as e:
                     logger.warning(f"Iapetus save error: {e}")
                     skipped += 1
