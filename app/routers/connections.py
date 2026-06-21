@@ -169,7 +169,10 @@ async def google_calendar_callback(
         raise HTTPException(status_code=400, detail="Client credentials missing — save them first")
 
     redirect_uri = str(request.base_url).rstrip("/").replace("http://", "https://") + "/api/v1/connections/google_calendar/callback"
-    tokens = await exchange_code(client_id, client_secret, code, redirect_uri)
+    try:
+        tokens = await exchange_code(client_id, client_secret, code, redirect_uri)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     new_secrets = {
         "client_id": client_id,
