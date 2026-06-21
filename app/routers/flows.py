@@ -296,3 +296,99 @@ async def duplicate_flow(
     await db.flush()
     await db.refresh(duplicate)
     return {"id": str(duplicate.id), "name": duplicate.name, "message": "Flow duplicated"}
+
+
+# ── Smart Sequence ─────────────────────────────────────────────
+
+class SmartSequenceRequest(BaseModel):
+    prompt: str
+
+@router.post("/smart-sequence")
+async def smart_sequence(
+    body: SmartSequenceRequest,
+    request: Request,
+    org_id: str = Depends(get_current_org),
+):
+    """Generate a flow from a natural language description using AI."""
+    from app.llm.client import llm
+
+    system = """You are a flow architect for the Philosopher OS automation builder (Strategeion).
+Generate a node-based automation flow from the user's description.
+
+Available node types and agents:
+
+TRIGGERS: New Lead Added, WhatsApp Message, Email Received, Calendar Event, Scheduled (Cron), Webhook, Manual Run
+PHILOSOPHERS: Plato (Strategy), Socrates (Questioning), Aristotle (Logic), Athena (Tactics), Heraclitus (Change),
+  Pythagoras (Metrics), Solon (Governance), Leonidas (Action), Archimedes (Building), Odysseus (Navigation)
+GODS: Iapetus (Workflows), Astraeus (Intel), Erebos (Cleanup), Phantasos (Creative), Stilbon (Messaging)
+OMEGA: Genesis (Creation), Overmind (Conquest), Omniscient (Truth), Eternal (Time), Singularity (Unity)
+ACTIONS: Send WhatsApp, Send Email, Post to Facebook, Post to Instagram, Update Lead, Create Task, Notify Team
+LOGIC: If/Else Condition, Time Delay, Wait for Reply, Loop, Stop Flow
+
+Return ONLY valid JSON (no markdown, no backticks):
+{
+  "nodes": [
+    {
+      "id": "n-1",
+      "type": "trigger",
+      "position": {"x": 55, "y": 115},
+      "data": {
+        "label": "NEW LEAD ADDED",
+        "category": "trigger",
+        "subtitle": "When a new lead enters the CRM",
+        "agentColor": "#1A5088",
+        "agentName": "New Lead",
+        "agentInitial": "NL",
+        "config": {},
+        "status": "idle"
+      }
+    }
+  ],
+  "edges": [
+    {"id": "e-1", "source": "n-1", "target": "n-2"}
+  ],
+  "suggestion": "A brief explanation of the flow"
+}
+
+Position nodes in a left-to-right layout starting at x=55,y=115 with 275px horizontal spacing between columns."""
+
+    user_msg = f"Create a flow for: {body.prompt}"
+
+    result = await llm.generate(
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+        model="deepseek-v4-flash",
+        temperature=0.3,
+        max_tokens=4096,
+    )
+
+    import json, re
+    text = result.text.strip()
+    # Strip markdown fence if present
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+    try:
+        flow_data = json.loads(text)
+    except json.JSONDecodeError:
+        # Try to find JSON block within the response
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            flow_data = json.loads(match.group())
+        else:
+            raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {text[:500]}")
+
+    nodes = flow_data.get("nodes", [])
+    edges = flow_data.get("edges", [])
+    suggestion = flow_data.get("suggestion", "")
+
+    if not nodes:
+        raise HTTPException(status_code=500, detail="No nodes generated — try a more specific prompt")
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "suggestion": suggestion,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
