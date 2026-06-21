@@ -212,14 +212,15 @@ app.include_router(flows.router, prefix="/api/v1/flows", tags=["Flows"])
 async def root():
     return {"app": settings.app_name, "version": "0.1.0", "status": "running"}
 
-# Normalize API trailing slashes — ensures /api/v1/leads and /api/v1/leads/ both work
-# without issuing a 307 redirect (which would use http:// and be blocked by Chrome)
+# Normalize API trailing slashes — strips trailing slashes from API paths
+# so /api/v1/leads/ → /api/v1/leads, preventing FastAPI's default 307 redirect
+# (which can break Chrome mixed-content checks and Railway healthchecks)
 from starlette.middleware.base import BaseHTTPMiddleware
-class NormalizeSlashMiddleware(BaseHTTPMiddleware):
+class StripSlashMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.scope.get("path", "")
-        if path.startswith("/api/") and not path.endswith("/") and "." not in path.rsplit("/", 1)[-1]:
-            request.scope["path"] = path + "/"
+        if path.startswith("/api/") and len(path) > 1 and path.endswith("/") and "." not in path.rsplit("/", 1)[-1]:
+            request.scope["path"] = path.rstrip("/")
         return await call_next(request)
 
-app.add_middleware(NormalizeSlashMiddleware)
+app.add_middleware(StripSlashMiddleware)

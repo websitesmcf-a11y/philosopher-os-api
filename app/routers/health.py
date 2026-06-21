@@ -44,13 +44,11 @@ async def detailed_health():
 
 
 @router.get("/health/readiness")
-@router.get("/health/readiness/")
 async def readiness():
     return {"status": "ready"}
 
 
 @router.get("/health/liveness")
-@router.get("/health/liveness/")
 async def liveness():
     return {"status": "alive"}
 
