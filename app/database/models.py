@@ -454,3 +454,22 @@ class Integration(Base, TimestampMixin):
     credentials_enc = Column(Text)
     last_checked_at = Column(DateTime(timezone=True))
     last_error = Column(Text)
+
+
+# ─── Flows (Strategeion visual automation builder) ──────────────────
+
+class Flow(Base, TimestampMixin):
+    """A saved Strategeion automation flow (node graph)."""
+    __tablename__ = "flows"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False, default="Untitled Flow")
+    description = Column(Text, nullable=True)
+    status = Column(String(50), default="draft")       # draft | active | running | error | archived
+    data = Column(JSON, default=dict)                  # Full node graph (nodes + edges)
+    version = Column(Integer, default=1)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_run_status = Column(String(50), nullable=True) # success | failed | running
+    run_count = Column(Integer, default=0)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

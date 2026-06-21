@@ -15,7 +15,7 @@ from app.routers import (
     auth, users, leads, clients, campaigns, messages,
     agents, finance, analytics, knowledge, calendar,
     tasks, automation, webhooks, chat, health, connections, cleanup,
-    lead_lists, notifications,
+    lead_lists, notifications, flows,
 )
 from app.database.session import engine, init_db
 from app.agents.council import CouncilOrchestrator
@@ -205,6 +205,7 @@ app.include_router(cleanup.router, prefix="/api/v1/cleanup", tags=["Cleanup"])
 app.include_router(beast_mode_router.router)
 app.include_router(lead_lists.router, prefix="/api/v1/lead-lists", tags=["Lead Lists"])
 app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
+app.include_router(flows.router, prefix="/api/v1/flows", tags=["Flows"])
 
 
 @app.get("/")
