@@ -171,8 +171,11 @@ async def google_calendar_callback(
     redirect_uri = str(request.base_url).rstrip("/").replace("http://", "https://") + "/api/v1/connections/google_calendar/callback"
     try:
         tokens = await exchange_code(client_id, client_secret, code, redirect_uri)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Token exchange failed ({type(e).__name__}): {e} | redirect_uri={redirect_uri}")
+
+    if "access_token" not in tokens:
+        raise HTTPException(status_code=400, detail=f"No access_token in Google response: {tokens}")
 
     new_secrets = {
         "client_id": client_id,
@@ -181,7 +184,7 @@ async def google_calendar_callback(
         "refresh_token": tokens.get("refresh_token", ""),
         "expires_at": (
             datetime.utcnow().isoformat() + "Z"
-        ),  # approximate; get_access_token will refresh
+        ),
     }
     row.credentials_enc = encrypt_dict(new_secrets)
     row.status = "connected"
@@ -189,7 +192,7 @@ async def google_calendar_callback(
     row.last_checked_at = datetime.utcnow()
     await db.flush()
 
-    return RedirectResponse(url=str(request.base_url).rstrip("/") + "/connections?google=authorized")
+    return RedirectResponse(url="https://philosopher-os.vercel.app/connections?google=authorized")
 
 
 @router.post("/google_calendar/sync")
