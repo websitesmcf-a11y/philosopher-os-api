@@ -1,6 +1,7 @@
 """Connections router — manage external service integrations from the app."""
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -127,9 +128,18 @@ async def whatsapp_list_sessions(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/google_calendar/auth-url")
-async def google_calendar_auth_url(request: Request, db: AsyncSession = Depends(get_db)):
-    """Build the Google OAuth consent URL from saved client credentials."""
-    result = await db.execute(select(Integration).where(Integration.provider == "google_calendar"))
+async def google_calendar_auth_url(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    org_id: str = Depends(get_current_org),
+):
+    """Build the Google OAuth consent URL from saved client credentials.
+    Scoped to the current organization."""
+    filters = [Integration.provider == "google_calendar"]
+    if org_id:
+        filters.append(Integration.org_id == uuid.UUID(org_id))
+    result = await db.execute(select(Integration).where(*filters))
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=400, detail="Save the client ID and secret first")
@@ -342,8 +352,12 @@ async def obsidian_sync(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Mirror Socrates data (conversations, knowledge, briefings) into the Obsidian vault."""
-    result = await db.execute(select(Integration).where(Integration.provider == "obsidian"))
+    """Mirror Socrates data (conversations, knowledge, briefings) into the Obsidian vault.
+    Scoped to the current organization."""
+    filters = [Integration.provider == "obsidian"]
+    if org_id:
+        filters.append(Integration.org_id == uuid.UUID(org_id))
+    result = await db.execute(select(Integration).where(*filters))
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=400, detail="Obsidian vault not configured — save the vault path first")
@@ -363,9 +377,14 @@ class ConnectionPayload(BaseModel):
 
 
 @router.get("")
-async def list_connections(db: AsyncSession = Depends(get_db)):
-    """All providers with their connection status. Secrets are never returned."""
-    service = ConnectionService(db)
+async def list_connections(
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    org_id: str = Depends(get_current_org),
+):
+    """All providers with their connection status. Secrets are never returned.
+    Scoped to the current organization."""
+    service = ConnectionService(db, org_id=org_id)
     return {"connections": await service.list_connections()}
 
 
@@ -374,11 +393,14 @@ async def save_connection(
     provider: str,
     payload: ConnectionPayload,
     db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    org_id: str = Depends(get_current_org),
 ):
-    """Save credentials for a provider; tests them live before storing."""
+    """Save credentials for a provider; tests them live before storing.
+    Scoped to the current organization."""
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-    service = ConnectionService(db)
+    service = ConnectionService(db, org_id=org_id)
     try:
         return await service.save_connection(provider, payload.secrets, payload.config)
     except ValueError as e:
@@ -386,18 +408,30 @@ async def save_connection(
 
 
 @router.post("/{provider}/test")
-async def test_connection(provider: str, db: AsyncSession = Depends(get_db)):
-    """Re-test a saved connection against the live service."""
+async def test_connection(
+    provider: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    org_id: str = Depends(get_current_org),
+):
+    """Re-test a saved connection against the live service.
+    Scoped to the current organization."""
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-    service = ConnectionService(db)
+    service = ConnectionService(db, org_id=org_id)
     return await service.test_saved(provider)
 
 
 @router.delete("/{provider}")
-async def delete_connection(provider: str, db: AsyncSession = Depends(get_db)):
-    """Disconnect a provider and remove its stored credentials."""
-    service = ConnectionService(db)
+async def delete_connection(
+    provider: str,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    org_id: str = Depends(get_current_org),
+):
+    """Disconnect a provider and remove its stored credentials.
+    Scoped to the current organization."""
+    service = ConnectionService(db, org_id=org_id)
     deleted = await service.delete_connection(provider)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"No saved connection for {provider}")

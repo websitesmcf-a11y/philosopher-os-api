@@ -7,10 +7,11 @@ are re-applied to runtime settings so every subsystem picks them up.
 import asyncio
 import logging
 import smtplib
+import uuid
 from datetime import datetime
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -371,12 +372,26 @@ async def get_provider_credentials(db: AsyncSession, provider: str) -> tuple[dic
 
 
 class ConnectionService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, org_id: str = ""):
         self.db = db
+        self.org_id = org_id
+
+    def _org_filter(self) -> list:
+        """Filter by org_id OR show global (NULL org) connections for backward compat."""
+        if self.org_id:
+            return [Integration.org_id == uuid.UUID(self.org_id), Integration.org_id.is_(None)]
+        return []
 
     async def list_connections(self) -> list[dict]:
-        """All known providers with connection status (secrets never returned)."""
-        result = await self.db.execute(select(Integration))
+        """All known providers with connection status (secrets never returned).
+
+        Shows both the org's own connections and global (NULL org) ones.
+        """
+        filters = self._org_filter()
+        query = select(Integration)
+        if filters:
+            query = query.where(or_(*filters))
+        result = await self.db.execute(query)
         saved = {row.provider: row for row in result.scalars()}
         out = []
         for name, meta in PROVIDERS.items():
@@ -421,13 +436,18 @@ class ConnectionService:
 
         ok, detail = await test_connection(provider, secrets, config)
 
-        result = await self.db.execute(select(Integration).where(Integration.provider == provider))
+        filters = [Integration.provider == provider]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
         if row is None:
             row = Integration(provider=provider)
             self.db.add(row)
 
         row.config = config
+        if self.org_id:
+            row.org_id = uuid.UUID(self.org_id)
         if secrets:
             row.credentials_enc = encrypt_dict(secrets)
         row.status = "connected" if ok else "error"
@@ -445,7 +465,10 @@ class ConnectionService:
         from app.services.browser_harness_bridge import bridge
 
         # Load existing row first so we don't regenerate the token on re-save
-        result = await self.db.execute(select(Integration).where(Integration.provider == "browser_harness"))
+        filters = [Integration.provider == "browser_harness"]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
 
         token = (secrets.get("token") or "").strip()
@@ -464,6 +487,8 @@ class ConnectionService:
 
         row.credentials_enc = encrypt_dict({"token": token})
         row.config = {}
+        if self.org_id:
+            row.org_id = uuid.UUID(self.org_id)
         row.last_checked_at = datetime.utcnow()
 
         if bridge.connected:
@@ -487,11 +512,16 @@ class ConnectionService:
             return {"provider": "google_calendar", "status": "error",
                     "detail": "Both the OAuth client ID and client secret are required"}
 
-        result = await self.db.execute(select(Integration).where(Integration.provider == "google_calendar"))
+        filters = [Integration.provider == "google_calendar"]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
         if row is None:
             row = Integration(provider="google_calendar")
             self.db.add(row)
+        if self.org_id and not row.org_id:
+            row.org_id = uuid.UUID(self.org_id)
 
         existing = decrypt_dict(row.credentials_enc or "")
         # New OAuth client invalidates previously issued tokens
@@ -519,11 +549,16 @@ class ConnectionService:
         """
         ok, detail = await _test_email_inbox(secrets, config)
 
-        result = await self.db.execute(select(Integration).where(Integration.provider == "email"))
+        filters = [Integration.provider == "email"]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
         if row is None:
             row = Integration(provider="email")
             self.db.add(row)
+        if self.org_id and not row.org_id:
+            row.org_id = uuid.UUID(self.org_id)
 
         existing = decrypt_dict(row.credentials_enc or "")
         inboxes: dict = existing.get("inboxes", {})
@@ -557,7 +592,10 @@ class ConnectionService:
         return {"provider": "email", "status": "connected" if ok else "error", "detail": detail}
 
     async def delete_connection(self, provider: str) -> bool:
-        result = await self.db.execute(select(Integration).where(Integration.provider == provider))
+        filters = [Integration.provider == provider]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
         if row is None:
             return False
@@ -585,7 +623,10 @@ class ConnectionService:
         return True, f"{n} inbox{'es' if n != 1 else ''} verified via SMTP login"
 
     async def test_saved(self, provider: str) -> dict:
-        result = await self.db.execute(select(Integration).where(Integration.provider == provider))
+        filters = [Integration.provider == provider]
+        if self.org_id:
+            filters.append(Integration.org_id == uuid.UUID(self.org_id))
+        result = await self.db.execute(select(Integration).where(*filters))
         row = result.scalar_one_or_none()
         if row is None:
             return {"provider": provider, "status": "disconnected", "detail": "Not configured"}
