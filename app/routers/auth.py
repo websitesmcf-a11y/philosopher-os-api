@@ -67,7 +67,7 @@ async def _is_2fa_enabled(email: str, db: AsyncSession) -> bool:
     return cfg.get("enabled") == True
 
 
-def _issue_local_token(email: str, name: str) -> str:
+def _issue_local_token(email: str, name: str, user_id: str = "", org_id: str = "") -> str:
     """Sign a local session token (dev/local mode without Clerk)."""
     from jose import jwt
     secret = settings.encryption_key or "socrates-local-dev-secret"
@@ -76,6 +76,8 @@ def _issue_local_token(email: str, name: str) -> str:
             "sub": email,
             "email": email,
             "name": name,
+            "user_id": user_id,
+            "org_id": org_id,
             "iss": "socrates-local",
             "exp": datetime.now(timezone.utc) + timedelta(days=7),
         },
@@ -102,9 +104,9 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         if twofa:
             return {"twofa_required": True, "email": req.email, "message": "2FA is enabled"}
         return {
-            "access_token": _issue_local_token(req.email, "Admin"),
+            "access_token": _issue_local_token(req.email, "Admin", org_id="00000000-0000-0000-0000-000000000001"),
             "token_type": "bearer",
-            "user": {"email": req.email, "name": "Admin", "role": "admin"},
+            "user": {"email": req.email, "name": "Admin", "role": "admin", "org_id": "00000000-0000-0000-0000-000000000001"},
         }
 
     # Check against registered users
@@ -130,10 +132,25 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     if twofa:
         return {"twofa_required": True, "email": req.email, "message": "2FA is enabled"}
 
+    # Look up user's org membership
+    from app.database.models import OrgMember
+    om_result = await db.execute(
+        select(OrgMember.org_id).where(OrgMember.user_id == user.id).limit(1)
+    )
+    om_row = om_result.scalar_one_or_none()
+    org_id = str(om_row) if om_row else ""
+
     return {
-        "access_token": _issue_local_token(req.email, user.name or "User"),
+        "access_token": _issue_local_token(
+            req.email, user.name or "User",
+            user_id=str(user.id), org_id=org_id,
+        ),
         "token_type": "bearer",
-        "user": {"email": user.email, "name": user.name, "role": "member", "id": str(user.id)},
+        "user": {
+            "email": user.email, "name": user.name,
+            "role": "member", "id": str(user.id),
+            "org_id": org_id,
+        },
     }
 
 
@@ -213,7 +230,7 @@ async def send_2fa_code(data: dict, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/2fa/verify")
-async def verify_2fa(data: dict):
+async def verify_2fa(data: dict, db: AsyncSession = Depends(get_db)):
     """Verify a 2FA code and issue a login token."""
     email = data.get("email", "")
     code = data.get("code", "")
@@ -238,10 +255,23 @@ async def verify_2fa(data: dict):
     stored["used"] = True
     _two_factor_codes.pop(email, None)
 
+    # Look up the user to get their org membership
+    from app.database.models import User, OrgMember
+    user_result = await db.execute(select(User).where(User.email == email))
+    user = user_result.scalar_one_or_none()
+    user_id = str(user.id) if user else ""
+    org_id = ""
+    if user:
+        om_result = await db.execute(
+            select(OrgMember.org_id).where(OrgMember.user_id == user.id).limit(1)
+        )
+        om_row = om_result.scalar_one_or_none()
+        org_id = str(om_row) if om_row else ""
+
     return {
-        "access_token": _issue_local_token(email, "Admin"),
+        "access_token": _issue_local_token(email, user.name if user else "Admin", user_id=user_id, org_id=org_id),
         "token_type": "bearer",
-        "user": {"email": email, "name": "Admin", "role": "admin"},
+        "user": {"email": email, "name": user.name if user else "Admin", "role": "admin", "org_id": org_id},
     }
 
 
@@ -412,7 +442,7 @@ async def create_invite(
             "role": role,
             "email": email,
             "invited_by": user.get("id", ""),
-            "org_id": "00000000-0000-0000-0000-000000000001",
+            "org_id": user.get("org_id", ""),
             "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         },
         status="active",
@@ -462,11 +492,17 @@ async def get_invite(
 @router.post("/register")
 @router.post("/signup")
 async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Create a new user account with email and password."""
+    """Create a new user account with email and password.
+
+    Each signup gets a fresh, isolated organization so users never
+    see each other's data. If signing up via an invite token, the
+    user joins the inviter's org instead.
+    """
     import traceback
     try:
         from app.database.models import User, OrgMember, Organization
         import uuid
+        import re
 
         if not req.email or not req.password:
             raise HTTPException(status_code=400, detail="Email and password required")
@@ -483,11 +519,11 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         from passlib.hash import bcrypt
         hashed = bcrypt.hash(req.password)
 
-        dev_org_id = "00000000-0000-0000-0000-000000000001"
         user_id = uuid.uuid4()
 
-        # Check if signing up via invite
+        # Check if signing up via invite — if so, join the inviter's org
         user_role = "member"
+        join_org_id = None
         invite_token = getattr(req, "invite_token", None)
         if invite_token:
             from app.database.models import Integration as IntModel
@@ -498,6 +534,7 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
             if inv_row and inv_row.status == "active":
                 inv_cfg = inv_row.config or {}
                 user_role = inv_cfg.get("role", "member")
+                join_org_id = inv_cfg.get("org_id")
                 inv_row.status = "used"
 
         # IMPORTANT: Flush user FIRST so its row exists in Postgres BEFORE
@@ -513,8 +550,24 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         db.add(user)
         await db.flush()
 
+        # Create a fresh organization for this user (unless joining via invite)
+        if join_org_id:
+            org_id = uuid.UUID(join_org_id)
+        else:
+            base_name = (req.name or req.email.split("@")[0]).strip()
+            slug_base = re.sub(r'[^a-z0-9-]', '', base_name.lower().replace(' ', '-'))[:40]
+            org = Organization(
+                id=uuid.uuid4(),
+                name=f"{base_name}'s Organization",
+                slug=f"{slug_base}-{uuid.uuid4().hex[:8]}",
+                settings={},
+            )
+            db.add(org)
+            await db.flush()
+            org_id = org.id
+
         org_member = OrgMember(
-            org_id=dev_org_id,
+            org_id=org_id,
             user_id=user_id,
             role=user_role,
         )
@@ -541,18 +594,13 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         return {
             "message": "Account created",
             "user": {"id": str(user.id), "email": user.email, "name": user.name},
+            "org": {"id": str(org_id), "name": "Your Workspace"},
         }
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
-
-
-@router.post("/register")
-async def register(req: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Alias for /signup — used by the login page's 'Create Account' tab."""
-    return await signup(req, db)
 
 
 @router.post("/change-password")

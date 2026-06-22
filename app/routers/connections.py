@@ -211,21 +211,44 @@ async def google_calendar_callback(
         user = existing.scalar_one_or_none()
 
         if not user:
-            dev_org_id = "00000000-0000-0000-0000-000000000001"
+            import re
             user_id = uuid.uuid4()
             user = User(
                 id=user_id, email=google_email, name=google_name,
                 clerk_id=f"google_{google_id}", avatar_url=userinfo.get("picture", ""),
             )
             db.add(user)
-            org_member = OrgMember(org_id=dev_org_id, user_id=user_id, role="member")
-            db.add(org_member)
             await db.flush()
-            await db.commit()
 
-        # Issue JWT
+            # Create a fresh org for this Google sign-up user
+            slug_base = re.sub(r'[^a-z0-9-]', '', google_name.lower().replace(' ', '-'))[:40]
+            org = Organization(
+                id=uuid.uuid4(),
+                name=f"{google_name}'s Organization",
+                slug=f"{slug_base}-{uuid.uuid4().hex[:8]}",
+                settings={},
+            )
+            db.add(org)
+            await db.flush()
+
+            org_member = OrgMember(org_id=org.id, user_id=user_id, role="member")
+            db.add(org_member)
+            await db.commit()
+            user_org_id = str(org.id)
+        else:
+            # Existing user — look up their org
+            om_result = await db.execute(
+                select(OrgMember.org_id).where(OrgMember.user_id == user.id).limit(1)
+            )
+            om_row = om_result.scalar_one_or_none()
+            user_org_id = str(om_row) if om_row else ""
+
+        # Issue JWT with user's org context
         from app.routers.auth import _issue_local_token
-        token = _issue_local_token(google_email, user.name or "User")
+        token = _issue_local_token(
+            google_email, user.name or "User",
+            user_id=str(user.id), org_id=user_org_id,
+        )
         return RedirectResponse(url=f"https://philosopher-os.vercel.app/login?token={token}&name={user.name}&email={google_email}")
 
     # ─── Normal Calendar auth flow ─────────────────────────────────────

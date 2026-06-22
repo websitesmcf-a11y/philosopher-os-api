@@ -82,11 +82,45 @@ def _auth_disabled() -> bool:
     return not settings.clerk_secret_key
 
 
+def _decode_local_token(token: str) -> dict | None:
+    """Decode a locally-signed JWT (issued by _issue_local_token).
+
+    Returns the payload dict on success, None on failure.
+    """
+    try:
+        from jose import jwt
+        secret = settings.encryption_key or "socrates-local-dev-secret"
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={"verify_exp": True},
+        )
+        return payload
+    except Exception as e:
+        logger.warning(f"Local JWT decode failed: {e}")
+        return None
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ) -> dict:
-    """Dependency that extracts and verifies the current user from Clerk JWT."""
+    """Dependency that extracts and verifies the current user from Clerk JWT
+    or locally-signed JWT (when Clerk is not configured)."""
     if _auth_disabled():
+        # No token at all → fall back to DEV_USER so health checks / local dev work
+        if not credentials:
+            return dict(DEV_USER)
+        # Token provided → decode locally to get the real user
+        payload = _decode_local_token(credentials.credentials)
+        if payload:
+            return {
+                "id": payload.get("user_id", payload.get("sub", "")),
+                "email": payload.get("email", ""),
+                "name": payload.get("name", ""),
+                "org_id": payload.get("org_id", ""),
+            }
+        # Token invalid → fall back to DEV_USER (resilient for local dev)
         return dict(DEV_USER)
 
     if not credentials:
@@ -108,6 +142,19 @@ async def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ) -> dict | None:
     """Like get_current_user but doesn't error if no token."""
+    if _auth_disabled():
+        if not credentials:
+            return None
+        payload = _decode_local_token(credentials.credentials)
+        if payload:
+            return {
+                "id": payload.get("user_id", payload.get("sub", "")),
+                "email": payload.get("email", ""),
+                "name": payload.get("name", ""),
+                "org_id": payload.get("org_id", ""),
+            }
+        return None
+
     if not credentials:
         return None
     payload = await verify_clerk_token(credentials.credentials)
