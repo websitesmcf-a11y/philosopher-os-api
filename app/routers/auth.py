@@ -470,6 +470,8 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
         if not req.email or not req.password:
             raise HTTPException(status_code=400, detail="Email and password required")
+        if len(req.password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
         # Check if user exists
         from sqlalchemy import select
