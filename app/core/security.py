@@ -77,8 +77,9 @@ DEV_USER = {
 
 
 def _auth_disabled() -> bool:
-    """True when Clerk isn't configured and we're not in production."""
-    return not settings.clerk_secret_key and not settings.is_production
+    """True when Clerk isn't configured — fall back to local auth so the app works
+    without a Clerk account in any environment (dev or production)."""
+    return not settings.clerk_secret_key
 
 
 async def get_current_user(

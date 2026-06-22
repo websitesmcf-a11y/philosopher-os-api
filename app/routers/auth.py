@@ -498,6 +498,9 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
                 user_role = inv_cfg.get("role", "member")
                 inv_row.status = "used"
 
+        # IMPORTANT: Flush user FIRST so its row exists in Postgres BEFORE
+        # org_member tries to reference it via FK. The async session does NOT
+        # guarantee SQLAlchemy auto-ordering with asyncpg.
         user = User(
             id=user_id,
             email=req.email,
@@ -506,6 +509,7 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
             avatar_url=None,
         )
         db.add(user)
+        await db.flush()
 
         org_member = OrgMember(
             org_id=dev_org_id,
@@ -529,8 +533,9 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
                 status="connected",
             )
             db.add(pw_integration)
-            await db.commit()
 
+        # Do NOT commit here — get_db() handles the final commit on success.
+        # Avoids "no transaction in progress" on Postgres from double-commit.
         return {
             "message": "Account created",
             "user": {"id": str(user.id), "email": user.email, "name": user.name},
@@ -540,6 +545,12 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
+
+
+@router.post("/register")
+async def register(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """Alias for /signup — used by the login page's 'Create Account' tab."""
+    return await signup(req, db)
 
 
 @router.post("/change-password")
