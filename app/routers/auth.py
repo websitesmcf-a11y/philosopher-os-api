@@ -706,43 +706,73 @@ async def logout(response: Response):
 
 
 async def _send_verification_email(email: str, token: str, name: str) -> bool:
-    """Send a verification email via configured SMTP. Returns True if sent."""
-    if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
-        return False  # SMTP not configured — token will be returned in API response (dev mode)
-    from app.integrations.smtp_email import smtp_send
+    """Send a verification email. Tries Resend API first, then SMTP fallback."""
     verify_url = f"https://philosopher-os.vercel.app/verify-email?token={token}"
-    try:
-        import asyncio
-        await asyncio.to_thread(
-            smtp_send,
-            host=settings.smtp_host,
-            port=settings.smtp_port,
-            username=settings.smtp_user,
-            password=settings.smtp_password,
-            to=[email],
-            subject="Verify your Philosopher OS email",
-            html=f"""
-            <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-                <h2 style="color: #1A1A2E;">Welcome to Philosopher OS</h2>
-                <p>Hi {name},</p>
-                <p>Click the button below to verify your email address:</p>
-                <a href="{verify_url}"
-                   style="display: inline-block; padding: 12px 28px; margin: 20px 0;
-                          background: linear-gradient(135deg, #C9A24D, #B8943A);
-                          color: #1A1A2E; text-decoration: none; border-radius: 8px;
-                          font-weight: 700; font-size: 14px;">
-                    Verify Email
-                </a>
-                <p style="color: #666; font-size: 12px;">Or paste this link: {verify_url}</p>
-                <p style="color: #999; font-size: 11px;">This link expires in 3 days.</p>
-            </div>
-            """,
-            text=f"Welcome to Philosopher OS!\n\nVerify your email: {verify_url}\n\nThis link expires in 3 days.",
-        )
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to send verification email to {email}: {e}")
-        return False
+    html = f"""
+    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #1A1A2E;">Welcome to Philosopher OS</h2>
+        <p>Hi {name},</p>
+        <p>Click the button below to verify your email address:</p>
+        <a href="{verify_url}"
+           style="display: inline-block; padding: 12px 28px; margin: 20px 0;
+                  background: linear-gradient(135deg, #C9A24D, #B8943A);
+                  color: #1A1A2E; text-decoration: none; border-radius: 8px;
+                  font-weight: 700; font-size: 14px;">
+            Verify Email
+        </a>
+        <p style="color: #666; font-size: 12px;">Or paste this link: {verify_url}</p>
+        <p style="color: #999; font-size: 11px;">This link expires in 3 days.</p>
+    </div>
+    """
+    text = f"Welcome to Philosopher OS! Verify your email: {verify_url}"
+
+    # Try Resend API (uses HTTPS — works on all Railway regions)
+    if settings.resend_api_key:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {settings.resend_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": "Philosopher OS <onboarding@resend.dev>",
+                        "to": [email],
+                        "subject": "Verify your Philosopher OS email",
+                        "html": html,
+                        "text": text,
+                    },
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Verification email sent to {email} via Resend")
+                    return True
+                logger.warning(f"Resend API returned {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Resend failed for {email}: {e}")
+
+    # Fall back to SMTP
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        try:
+            from app.integrations.smtp_email import smtp_send
+            import asyncio
+            await asyncio.to_thread(
+                smtp_send,
+                host=settings.smtp_host,
+                port=settings.smtp_port,
+                username=settings.smtp_user,
+                password=settings.smtp_password,
+                to=[email],
+                subject="Verify your Philosopher OS email",
+                html=html,
+                text=text,
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"SMTP failed for {email}: {e}")
+
+    return False
 
 
 @router.post("/verify-email")
