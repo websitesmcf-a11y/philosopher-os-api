@@ -104,6 +104,9 @@ class User(Base, TimestampMixin):
     avatar_url = Column(String(1024))
     role = Column(String(50), default="member")
     preferences = Column(JSON, default=dict)
+    email_verified = Column(Boolean, default=False)
+    email_verify_token = Column(String(255), nullable=True)
+    email_verify_token_expires = Column(DateTime(timezone=True), nullable=True)
 
 
 class OrgMember(Base):
@@ -257,6 +260,12 @@ class Campaign(Base, TimestampMixin):
 
 class CampaignLead(Base):
     __tablename__ = "campaign_leads"
+
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
+    status = Column(String(50), default="pending")
+    sent_at = Column(DateTime(timezone=True))
+    replied_at = Column(DateTime(timezone=True))
 
 
 # ─── Lead Lists ──────────────────────────────────────────────────
