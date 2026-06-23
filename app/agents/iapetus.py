@@ -158,7 +158,13 @@ class Iapetus(BaseAgent):
                             skipped += 1
                             continue
 
+                        import uuid as _uuid
+                        org_uuid = _uuid.UUID(str(context.org_id)) if context and context.org_id else None
+                        if not org_uuid:
+                            continue
                         lead = Lead(
+                            id=_uuid.uuid4(),
+                            org_id=org_uuid,
                             name=name,
                             phone=phone_clean or None,
                             email=biz.get("email") or None,

@@ -3,35 +3,75 @@
 When a campaign reserves a lead list, all leads in that list are marked with
 the campaign's list ID and are hidden from the general lead pool (visible only
 to the campaign owner / admins).
+
+Persisted in the `lead_lists` table (was previously in-memory only).
 """
 
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, delete as sa_delete, text
+from sqlalchemy import select, func, update, delete as sa_delete, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_db
 from app.core.security import get_current_user, get_current_org
-from app.database.models import Lead
+from app.database.models import Lead, LeadList
 
 router = APIRouter()
-
-
-# ─── In-memory / JSON-backed store (fallback when no dedicated table yet) ──
-# Once the lead_lists and lead_list_items tables exist in the DB schema, swap
-# these for real SQLAlchemy models.
-
-LEAD_LISTS: dict[str, dict] = {}        # list_id -> {id, org_id, name, description, created_by, lead_count, is_archived, created_at}
-LEAD_LIST_ITEMS: dict[str, list[str]] = {}  # list_id -> [lead_id, ...]
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _to_dict(ll: LeadList) -> dict:
+    """Convert a LeadList ORM row to a plain dict matching the old in-memory shape
+    so both the API responses and agent code that reads LEAD_LISTS continue to work."""
+    return {
+        "id": str(ll.id),
+        "org_id": str(ll.org_id),
+        "name": ll.name,
+        "description": ll.description or "",
+        "created_by": str(ll.created_by) if ll.created_by else "",
+        "lead_count": ll.lead_count or 0,
+        "is_archived": ll.is_archived or False,
+        "locked": ll.locked or False,
+        "locked_by": ll.locked_by or None,
+        "locked_at": ll.locked_at.isoformat() if ll.locked_at else None,
+        "created_at": ll.created_at.isoformat() if ll.created_at else None,
+        "updated_at": ll.updated_at.isoformat() if ll.updated_at else None,
+    }
+
+
+async def get_lead_list(db: AsyncSession, list_id: str, org_id: str) -> LeadList | None:
+    """Fetch a single lead list by ID + org. Returns None if not found."""
+    import uuid
+    try:
+        lid = uuid.UUID(list_id)
+    except ValueError:
+        return None
+    result = await db.execute(
+        select(LeadList).where(LeadList.id == lid, LeadList.org_id == uuid.UUID(org_id))
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_list_lead_ids(db: AsyncSession, list_id: str) -> list[str]:
+    """Fetch all lead IDs that belong to a lead list (using Lead.list_id)."""
+    import uuid
+    try:
+        lid = uuid.UUID(list_id)
+    except ValueError:
+        return []
+    result = await db.execute(
+        select(Lead.id).where(Lead.list_id == lid)
+    )
+    return [str(row[0]) for row in result.all()]
+
+
 # ─── CRUD ─────────────────────────────────────────────────────────────────
+
 
 @router.get("")
 async def list_lists(
@@ -40,7 +80,14 @@ async def list_lists(
     user: dict = Depends(get_current_user),
 ):
     """Return all lead lists for the current org."""
-    items = [ll for ll in LEAD_LISTS.values() if ll["org_id"] == org_id and not ll["is_archived"]]
+    import uuid
+    result = await db.execute(
+        select(LeadList).where(
+            LeadList.org_id == uuid.UUID(org_id),
+            LeadList.is_archived == False,
+        ).order_by(LeadList.created_at.desc())
+    )
+    items = [_to_dict(row) for row in result.scalars().all()]
     return {"items": items, "total": len(items)}
 
 
@@ -52,25 +99,20 @@ async def create_list(
     user: dict = Depends(get_current_user),
 ):
     """Create a new lead list."""
-    list_id = str(uuid4())
-    now = _now()
-    entry = {
-        "id": list_id,
-        "org_id": org_id,
-        "name": body.get("name", "Untitled List"),
-        "description": body.get("description", ""),
-        "created_by": user.get("id", ""),
-        "lead_count": 0,
-        "is_archived": False,
-        "locked": False,
-        "locked_by": None,
-        "locked_at": None,
-        "created_at": now,
-        "updated_at": now,
-    }
-    LEAD_LISTS[list_id] = entry
-    LEAD_LIST_ITEMS[list_id] = []
-    return entry
+    import uuid
+    ll = LeadList(
+        id=uuid.uuid4(),
+        org_id=uuid.UUID(org_id),
+        name=body.get("name", "Untitled List"),
+        description=body.get("description", ""),
+        created_by=uuid.UUID(user.get("id", "00000000-0000-0000-0000-000000000000")),
+        lead_count=0,
+        is_archived=False,
+        locked=False,
+    )
+    db.add(ll)
+    await db.flush()
+    return _to_dict(ll)
 
 
 @router.get("/{list_id}")
@@ -81,31 +123,40 @@ async def get_list(
     user: dict = Depends(get_current_user),
 ):
     """Get a single lead list with its leads."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
 
-    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
-    # Fetch leads from the leads table
+    lead_ids = await get_list_lead_ids(db, list_id)
     leads = []
     if lead_ids:
-        result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
-        for row in result.scalars().all():
-            leads.append({
-                "id": str(row.id),
-                "name": row.name,
-                "phone": row.phone,
-                "email": row.email,
-                "company": row.company,
-                "industry": row.industry,
-                "status": row.status,
-                "score": row.score or 0,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-            })
+        import uuid
+        uuids = []
+        for lid in lead_ids:
+            try:
+                uuids.append(uuid.UUID(lid))
+            except ValueError:
+                pass
+        if uuids:
+            result = await db.execute(select(Lead).where(Lead.id.in_(uuids)))
+            for row in result.scalars().all():
+                leads.append({
+                    "id": str(row.id),
+                    "name": row.name,
+                    "phone": row.phone,
+                    "email": row.email,
+                    "company": row.company,
+                    "industry": row.industry,
+                    "status": row.status,
+                    "score": row.score or 0,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                })
 
-    return {**ll, "leads": leads}
+    result_dict = _to_dict(ll)
+    result_dict["leads"] = leads
+    return result_dict
 
 
 @router.delete("/{list_id}")
@@ -115,17 +166,19 @@ async def delete_list(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Delete a lead list (does NOT delete the leads themselves)."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    """Archive a lead list (does NOT delete the leads themselves)."""
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
-    LEAD_LISTS[list_id]["is_archived"] = True
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
+    ll.is_archived = True
+    await db.flush()
     return {"deleted": True}
 
 
 # ─── Lead management within lists ─────────────────────────────────────────
+
 
 @router.post("/{list_id}/leads")
 async def add_leads_to_list(
@@ -136,32 +189,33 @@ async def add_leads_to_list(
     user: dict = Depends(get_current_user),
 ):
     """Add leads to a list."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
 
+    import uuid
     lead_ids: list[str] = body.get("lead_ids", [])
-    existing = set(LEAD_LIST_ITEMS.get(list_id, []))
+    list_uuid = uuid.UUID(list_id)
     added = 0
     for lid in lead_ids:
-        if lid not in existing:
-            existing.add(lid)
-            added += 1
+        try:
+            lead_uuid = uuid.UUID(lid)
+            result = await db.execute(
+                select(Lead).where(Lead.id == lead_uuid)
+            )
+            lead = result.scalar_one_or_none()
+            if lead and lead.list_id is None:
+                lead.list_id = list_uuid
+                added += 1
+        except ValueError:
+            continue
 
-    # Also mark leads with the list_id on the Lead row itself
-    from sqlalchemy import text as sa_text
-    if lead_ids:
-        for lid in lead_ids:
-            await db.execute(sa_text(
-                "UPDATE leads SET list_id = ?, updated_at = ? WHERE id = ?"
-            ).bindparams(list_id, _now(), lid))
-        await db.commit()
-
-    LEAD_LIST_ITEMS[list_id] = list(existing)
-    LEAD_LISTS[list_id]["lead_count"] = len(existing)
-    LEAD_LISTS[list_id]["updated_at"] = _now()
+    # Update lead count
+    current_ids = await get_list_lead_ids(db, list_id)
+    ll.lead_count = len(current_ids)
+    await db.flush()
     return {"added": added}
 
 
@@ -174,29 +228,28 @@ async def remove_lead_from_list(
     user: dict = Depends(get_current_user),
 ):
     """Remove a single lead from a list."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
 
-    items = LEAD_LIST_ITEMS.get(list_id, [])
-    if lead_id in items:
-        items.remove(lead_id)
-        # Also clear list_id on the lead
-        await db.execute(
-            text("UPDATE leads SET list_id = NULL, updated_at = :now WHERE id = :id")
-            .bindparams(now=_now(), id=lead_id)
-        )
-        await db.commit()
+    import uuid
+    try:
+        lead_uuid = uuid.UUID(lead_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid lead ID")
 
-    LEAD_LIST_ITEMS[list_id] = items
-    LEAD_LISTS[list_id]["lead_count"] = len(items)
-    LEAD_LISTS[list_id]["updated_at"] = _now()
+    await db.execute(
+        update(Lead).where(Lead.id == lead_uuid).values(list_id=None, updated_at=datetime.now(timezone.utc))
+    )
+    ll.lead_count = max(0, (ll.lead_count or 1) - 1)
+    await db.flush()
     return {"removed": True}
 
 
 # ─── Campaign reservation ─────────────────────────────────────────────────
+
 
 @router.post("/{list_id}/reserve")
 async def reserve_list_for_campaign(
@@ -206,45 +259,37 @@ async def reserve_list_for_campaign(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Reserve all leads in a list for a campaign — locks them from the general pool.
-
-    After this call, the leads in this list become visible only to the campaign
-    owner (and admins). They are hidden from the general lead list for other users.
-    """
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    """Reserve all leads in a list for a campaign — locks them from the general pool."""
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
 
     campaign_id = body.get("campaign_id")
     if not campaign_id:
         raise HTTPException(status_code=400, detail="campaign_id is required")
 
-    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
-    reserved = 0
+    import uuid
+    campaign_uuid = uuid.UUID(campaign_id)
+    lead_ids = await get_list_lead_ids(db, list_id)
 
     # Update campaign with the list reference
-    from sqlalchemy import text as sa_text
     await db.execute(sa_text(
-        "UPDATE campaigns SET lead_list_id = ? WHERE id = ? AND org_id = ?"
-    ).bindparams(list_id, campaign_id, org_id))
+        "UPDATE campaigns SET lead_list_id = :list_id WHERE id = :cid AND org_id = :oid"
+    ).bindparams(list_id=list_id, cid=campaign_id, oid=org_id))
 
-    # Mark all leads as reserved (set reservation_id on each lead)
+    # Mark leads as reserved
+    reserved = 0
     if lead_ids:
         for lid in lead_ids:
             await db.execute(sa_text(
-                "UPDATE leads SET reservation_id = ?, updated_at = ? WHERE id = ?"
-            ).bindparams(campaign_id, _now(), lid))
+                "UPDATE leads SET reservation_id = :cid, updated_at = :now WHERE id = :id"
+            ).bindparams(cid=campaign_id, now=_now(), id=lid))
         reserved = len(lead_ids)
 
-    await db.commit()
-
-    return {
-        "reserved": reserved,
-        "campaign_id": campaign_id,
-        "list_id": list_id,
-    }
+    await db.flush()
+    return {"reserved": reserved, "campaign_id": campaign_id, "list_id": list_id}
 
 
 # ─── Locking / Unlocking ────────────────────────────────────────────────────
@@ -258,16 +303,16 @@ async def lock_list(
     user: dict = Depends(get_current_user),
 ):
     """Lock a lead list so no leads can be added or removed from it."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        return {"locked": True, "locked_by": ll.get("locked_by"), "message": f"List is already locked by {ll.get('locked_by', 'unknown')}."}
-    ll["locked"] = True
-    ll["locked_by"] = user.get("id", "unknown")
-    ll["locked_at"] = _now()
-    ll["updated_at"] = _now()
-    return {"locked": True, "locked_by": ll["locked_by"], "message": f"Lead list '{ll['name']}' is now locked."}
+    if ll.locked:
+        return {"locked": True, "locked_by": ll.locked_by, "message": f"List is already locked by {ll.locked_by}."}
+    ll.locked = True
+    ll.locked_by = user.get("id", "unknown")
+    ll.locked_at = datetime.now(timezone.utc)
+    await db.flush()
+    return {"locked": True, "locked_by": ll.locked_by, "message": f"Lead list '{ll.name}' is now locked."}
 
 
 @router.post("/{list_id}/unlock")
@@ -278,19 +323,19 @@ async def unlock_list(
     user: dict = Depends(get_current_user),
 ):
     """Unlock a lead list so leads can be added or removed again."""
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if not ll.get("locked"):
+    if not ll.locked:
         return {"locked": False, "message": "List is not locked."}
-    ll["locked"] = False
-    ll["locked_by"] = None
-    ll["locked_at"] = None
-    ll["updated_at"] = _now()
-    return {"locked": False, "message": f"Lead list '{ll['name']}' is now unlocked."}
+    ll.locked = False
+    ll.locked_by = None
+    ll.locked_at = None
+    await db.flush()
+    return {"locked": False, "message": f"Lead list '{ll.name}' is now unlocked."}
 
 
-# ─── Cleanup: remove leads without contact info ──────────────────────────
+# ─── Cleanup ──────────────────────────────────────────────────────────
 
 
 @router.post("/{list_id}/cleanup")
@@ -301,78 +346,49 @@ async def cleanup_lead_list(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Remove leads from a list that lack phone numbers and/or email addresses.
-
-    Request body:
-      - remove_no_phone (bool): remove leads with no phone number
-      - remove_no_email (bool): remove leads with no email address
-
-    Both flags can be combined (removes leads missing either).
-    """
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    """Remove leads from a list that lack phone numbers and/or email addresses."""
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
-    if ll.get("locked"):
-        raise HTTPException(status_code=423, detail=f"Lead list '{ll['name']}' is locked by {ll.get('locked_by', 'unknown')}. Unlock it first to modify.")
+    if ll.locked:
+        raise HTTPException(status_code=423, detail=f"Lead list '{ll.name}' is locked by {ll.locked_by}. Unlock it first to modify.")
 
     remove_no_phone = body.get("remove_no_phone", False)
     remove_no_email = body.get("remove_no_email", False)
-
     if not remove_no_phone and not remove_no_email:
-        return {"removed": 0, "message": "No cleanup criteria specified. Set remove_no_phone and/or remove_no_email."}
+        return {"removed": 0, "message": "No cleanup criteria specified."}
 
-    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
-    if not lead_ids:
-        return {"removed": 0, "message": "List is empty."}
-
-    # Fetch actual lead rows to check phone/email
-    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    import uuid
+    list_uuid = uuid.UUID(list_id)
+    result = await db.execute(select(Lead).where(Lead.list_id == list_uuid))
     leads = result.scalars().all()
-
-    conditions = []
-    if remove_no_phone:
-        conditions.append(lambda l: not l.phone)
-    if remove_no_email:
-        conditions.append(lambda l: not l.email)
 
     to_remove = []
     for lead in leads:
-        if any(check(lead) for check in conditions):
-            to_remove.append(str(lead.id))
+        if (remove_no_phone and not lead.phone) or (remove_no_email and not lead.email):
+            to_remove.append(lead)
 
-    if not to_remove:
-        return {"removed": 0, "message": f"No leads match the cleanup criteria in this list ({len(lead_ids)} total)."}
+    for lead in to_remove:
+        lead.list_id = None
 
-    # Remove from the in-memory list
-    items = [lid for lid in lead_ids if lid not in to_remove]
-    LEAD_LIST_ITEMS[list_id] = items
-    LEAD_LISTS[list_id]["lead_count"] = len(items)
-    LEAD_LISTS[list_id]["updated_at"] = _now()
+    ll.lead_count = (ll.lead_count or 0) - len(to_remove)
+    await db.flush()
 
-    # Clear list_id on the removed lead rows
-    from sqlalchemy import text as sa_text
-    for lid in to_remove:
-        await db.execute(sa_text(
-            "UPDATE leads SET list_id = NULL, updated_at = :now WHERE id = :id"
-        ).bindparams(now=_now(), id=lid))
-    await db.commit()
-
-    summary = []
+    criteria = []
     if remove_no_phone:
-        summary.append("no phone")
+        criteria.append("no phone")
     if remove_no_email:
-        summary.append("no email")
+        criteria.append("no email")
 
     return {
         "removed": len(to_remove),
-        "remaining": len(items),
-        "total_before": len(lead_ids),
-        "criteria": summary,
-        "message": f"Removed {len(to_remove)} lead(s) with {', '.join(summary)} from '{ll['name']}'.",
+        "remaining": ll.lead_count or 0,
+        "total_before": len(leads),
+        "criteria": criteria,
     }
 
 
-# ─── Phone number cleaning ────────────────────────────────────────────────────
+# ─── Phone cleaning ────────────────────────────────────────────────────
 
 
 @router.post("/{list_id}/clean-phones")
@@ -382,30 +398,22 @@ async def clean_lead_phones(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Analyze and fix all phone numbers in a lead list.
-
-    Returns a full report without modifying anything (dry-run).
-    Call PATCH /{list_id}/clean-phones/apply to persist fixes.
-    """
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    """Analyze all phone numbers in a lead list (dry-run)."""
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
 
-    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
-    if not lead_ids:
-        return {"total": 0, "message": "List is empty."}
-
-    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    import uuid
+    result = await db.execute(select(Lead).where(Lead.list_id == uuid.UUID(list_id)))
     leads = result.scalars().all()
 
     from app.services.lead_cleaner import clean_lead_list
-
     lead_dicts = [{"id": str(l.id), "name": l.name, "phone": l.phone or ""} for l in leads]
     report = clean_lead_list(lead_dicts)
 
     return {
         "list_id": list_id,
-        "list_name": ll["name"],
+        "list_name": ll.name,
         "total": report["total"],
         "valid": report["valid"],
         "fixed": report["fixed"],
@@ -423,30 +431,20 @@ async def apply_phone_fixes(
     org_id: str = Depends(get_current_org),
     user: dict = Depends(get_current_user),
 ):
-    """Apply phone number fixes from a previous analysis.
-
-    Request body options:
-      - auto_fix (bool): apply all high-confidence fixes (default: true)
-      - remove_invalid (bool): delete leads with invalid phones (default: false)
-      - deduplicate (bool): remove duplicate phone numbers (default: false)
-    """
-    ll = LEAD_LISTS.get(list_id)
-    if not ll or ll["org_id"] != org_id:
+    """Apply phone number fixes from a previous analysis."""
+    ll = await get_lead_list(db, list_id, org_id)
+    if not ll:
         raise HTTPException(status_code=404, detail="Lead list not found")
 
+    import uuid
     auto_fix = body.get("auto_fix", True)
     remove_invalid = body.get("remove_invalid", False)
     deduplicate = body.get("deduplicate", False)
 
-    lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
-    if not lead_ids:
-        return {"message": "List is empty.", "updated": 0, "removed": 0}
-
-    result = await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+    result = await db.execute(select(Lead).where(Lead.list_id == uuid.UUID(list_id)))
     leads = result.scalars().all()
 
     from app.services.lead_cleaner import clean_lead_list
-
     lead_dicts = [{"id": str(l.id), "name": l.name, "phone": l.phone or ""} for l in leads]
     report = clean_lead_list(lead_dicts)
 
@@ -455,9 +453,7 @@ async def apply_phone_fixes(
     fix_log = []
 
     for r in report["results"]:
-        lead_id = r["lead_id"]
-        # Find the actual Lead object
-        lead = next((l for l in leads if str(l.id) == lead_id), None)
+        lead = next((l for l in leads if str(l.id) == r["lead_id"]), None)
         if not lead:
             continue
 
@@ -465,58 +461,27 @@ async def apply_phone_fixes(
             if r["cleaned_phone"] != (lead.phone or "").strip():
                 lead.phone = r["cleaned_phone"]
                 updated += 1
-                fix_log.append({
-                    "lead_id": lead_id,
-                    "name": r["name"],
-                    "from": r["original_phone"],
-                    "to": r["cleaned_phone"],
-                })
+                fix_log.append({"lead_id": r["lead_id"], "name": r["name"], "from": r["original_phone"], "to": r["cleaned_phone"]})
 
         if remove_invalid and r["confidence"] == "invalid" and not r.get("splits"):
-            # Remove from the in-memory list
-            item_list = LEAD_LIST_ITEMS.get(list_id, [])
-            if lead_id in item_list:
-                item_list.remove(lead_id)
-                LEAD_LIST_ITEMS[list_id] = item_list
-                LEAD_LISTS[list_id]["lead_count"] = len(item_list)
-                LEAD_LISTS[list_id]["updated_at"] = _now()
-                removed += 1
-                fix_log.append({
-                    "lead_id": lead_id,
-                    "name": r["name"],
-                    "action": "removed_invalid",
-                    "reason": r["reason"],
-                })
+            lead.list_id = None
+            removed += 1
+            fix_log.append({"lead_id": r["lead_id"], "name": r["name"], "action": "removed_invalid", "reason": r["reason"]})
 
-    # Deduplicate by phone number
     if deduplicate:
         seen_phones: dict[str, str] = {}
         for r in report["results"]:
             if r["cleaned_phone"] and r["confidence"] != "invalid":
                 if r["cleaned_phone"] in seen_phones:
-                    # Remove duplicate
-                    item_list = LEAD_LIST_ITEMS.get(list_id, [])
-                    if r["lead_id"] in item_list:
-                        item_list.remove(r["lead_id"])
-                        LEAD_LIST_ITEMS[list_id] = item_list
-                        LEAD_LISTS[list_id]["lead_count"] = len(item_list)
-                        LEAD_LISTS[list_id]["updated_at"] = _now()
+                    dup_lead = next((l for l in leads if str(l.id) == r["lead_id"]), None)
+                    if dup_lead:
+                        dup_lead.list_id = None
                         removed += 1
-                        fix_log.append({
-                            "lead_id": r["lead_id"],
-                            "name": r["name"],
-                            "action": "removed_duplicate",
-                            "phone": r["cleaned_phone"],
-                        })
+                        fix_log.append({"lead_id": r["lead_id"], "name": r["name"], "action": "removed_duplicate", "phone": r["cleaned_phone"]})
                 else:
                     seen_phones[r["cleaned_phone"]] = r["lead_id"]
 
-    await db.commit()
+    ll.lead_count = (ll.lead_count or 0) - removed
+    await db.flush()
 
-    return {
-        "updated": updated,
-        "removed": removed,
-        "total_before": len(lead_ids),
-        "remaining": len(LEAD_LIST_ITEMS.get(list_id, [])),
-        "fixes": fix_log,
-    }
+    return {"updated": updated, "removed": removed, "fixes": fix_log}

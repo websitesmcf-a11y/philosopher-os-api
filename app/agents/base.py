@@ -539,51 +539,75 @@ class BaseAgent(ABC):
             return {"status": "success", "list_id": list_id, "name": name, "lead_count": 0}
 
         if tool_name == "add_leads_to_list":
-            from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+            import uuid as _uuid
             list_id = args.get("list_id", "")
             lead_ids: list[str] = args.get("lead_ids", [])
-            if list_id not in LEAD_LISTS:
+            if not context or not context.db_session:
+                return {"status": "error", "message": "No DB session available"}
+            from app.database.models import LeadList as DBLeadList, Lead
+            from sqlalchemy import select
+            try:
+                list_uuid = _uuid.UUID(list_id)
+            except ValueError:
+                return {"status": "error", "message": f"Invalid list_id: {list_id}"}
+            ll_result = await context.db_session.execute(
+                select(DBLeadList).where(DBLeadList.id == list_uuid)
+            )
+            ll = ll_result.scalar_one_or_none()
+            if not ll:
                 return {"status": "error", "message": f"Lead list '{list_id}' not found"}
-            existing = set(LEAD_LIST_ITEMS.get(list_id, []))
             added = 0
+            from sqlalchemy import text as sa_text
             for lid in lead_ids:
-                if lid not in existing:
-                    existing.add(lid)
+                try:
+                    lead_uuid = _uuid.UUID(lid)
+                except ValueError:
+                    continue
+                lead_result = await context.db_session.execute(
+                    select(Lead).where(Lead.id == lead_uuid)
+                )
+                lead = lead_result.scalar_one_or_none()
+                if lead and lead.list_id is None:
+                    lead.list_id = list_uuid
                     added += 1
-            LEAD_LIST_ITEMS[list_id] = list(existing)
-            LEAD_LISTS[list_id]["lead_count"] = len(existing)
-            LEAD_LISTS[list_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
-            # Also update list_id on the Lead rows
-            if context and context.db_session and lead_ids:
-                from sqlalchemy import text as sa_text
-                for lid in lead_ids:
-                    await context.db_session.execute(sa_text(
-                        "UPDATE leads SET list_id = :list_id, updated_at = :now WHERE id = :id"
-                    ).bindparams(list_id=list_id, now=datetime.now(timezone.utc).isoformat(), id=lid))
-                await context.db_session.commit()
-            return {"status": "success", "added": added, "total": len(existing)}
+            # Update lead count
+            count_result = await context.db_session.execute(
+                select(Lead).where(Lead.list_id == list_uuid)
+            )
+            ll.lead_count = len(count_result.all())
+            await context.db_session.commit()
+            return {"status": "success", "added": added, "total": ll.lead_count}
 
         if tool_name == "reserve_lead_list":
-            from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+            import uuid as _uuid
             list_id = args.get("list_id", "")
             campaign_name = args.get("campaign_name", "Beast Mode Campaign")
-            if list_id not in LEAD_LISTS:
-                return {"status": "error", "message": f"Lead list '{list_id}' not found"}
-            import uuid as _uuid
             campaign_id = _uuid.uuid4()
-            lead_ids = LEAD_LIST_ITEMS.get(list_id, [])
             reserved = 0
             if context and context.db_session and context.org_id:
                 from sqlalchemy import text as sa_text
+                from app.database.models import Campaign, Lead
                 org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+
+                # Fetch leads belonging to this list from DB
+                try:
+                    list_uuid = _uuid.UUID(list_id)
+                except ValueError:
+                    return {"status": "error", "message": f"Invalid list_id: {list_id}"}
+
+                lead_result = await context.db_session.execute(
+                    select(Lead.id).where(Lead.list_id == list_uuid)
+                )
+                lead_ids = [str(row[0]) for row in lead_result.all()]
+
                 if lead_ids:
                     for lid in lead_ids:
                         await context.db_session.execute(sa_text(
                             "UPDATE leads SET reservation_id = :cid, updated_at = :now WHERE id = :id"
                         ).bindparams(cid=str(campaign_id), now=datetime.now(timezone.utc).isoformat(), id=lid))
                     reserved = len(lead_ids)
+
                 # Create a campaign record via ORM
-                from app.database.models import Campaign
                 campaign = Campaign(
                     id=campaign_id,
                     org_id=org_uuid,
@@ -591,7 +615,7 @@ class BaseAgent(ABC):
                     channel="lead_list",
                     message_template="{{message}}",
                     status="active",
-                    lead_list_id=_uuid.UUID(list_id) if isinstance(list_id, str) else list_id,
+                    lead_list_id=list_uuid,
                     target_count=reserved,
                 )
                 context.db_session.add(campaign)
@@ -657,66 +681,71 @@ class BaseAgent(ABC):
             else:
                 saved_ids = []
 
-            # Step 3: Create a lead list (or append to existing one with same name)
-            from app.routers.lead_lists import LEAD_LISTS as _LL, LEAD_LIST_ITEMS as _LLI
-            org_id_str = context.org_id if context else ""
+            # Step 3: Create or find a lead list in the database
             now = datetime.now(timezone.utc).isoformat()
-
-            # Check if a list with this name already exists for this org
             list_id = None
-            for existing_id, existing in list(_LL.items()):
-                if existing.get("name") == list_name and existing.get("org_id") == org_id_str:
-                    list_id = existing_id
-                    break
 
-            if list_id:
-                # Append to existing list
-                existing_items = set(_LLI.get(list_id, []))
-                for lid in (saved_ids or []):
-                    if lid not in existing_items:
-                        existing_items.add(lid)
-                _LLI[list_id] = list(existing_items)
-                _LL[list_id]["lead_count"] = len(existing_items)
-                _LL[list_id]["updated_at"] = now
-            else:
-                # Create new list
-                list_id = str(_uuid.uuid4())
-                list_entry = {
-                    "id": list_id,
-                    "org_id": org_id_str,
-                    "name": list_name,
-                    "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
-                    "created_by": org_id_str,
-                    "lead_count": len(saved_ids or businesses),
-                    "is_archived": False,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                _LL[list_id] = list_entry
-                _LLI[list_id] = list(saved_ids) if saved_ids else []
+            if context and context.db_session and context.org_id:
+                from app.database.models import LeadList as DBLeadList
+                from sqlalchemy import select
+                org_uuid_list = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
 
-            # Step 4: Update list_id on lead rows (cast to UUID to avoid type mismatch)
-            if context and context.db_session and saved_ids:
-                from sqlalchemy import text as sa_text
-                for lid in saved_ids:
-                    stmt = sa_text("UPDATE leads SET list_id = CAST(:list_id AS UUID), "
-                                   "updated_at = CAST(:now AS TIMESTAMP) WHERE id = CAST(:id AS UUID)")
-                    await context.db_session.execute(stmt.bindparams(list_id=list_id, now=now, id=lid))
-                try:
+                # Check if a list with this name already exists for this org
+                existing_result = await context.db_session.execute(
+                    select(DBLeadList).where(
+                        DBLeadList.org_id == org_uuid_list,
+                        DBLeadList.name == list_name,
+                        DBLeadList.is_archived == False,
+                    )
+                )
+                existing_ll = existing_result.scalar_one_or_none()
+
+                if existing_ll:
+                    list_id = str(existing_ll.id)
+                else:
+                    # Create new list
+                    new_ll = DBLeadList(
+                        id=_uuid.uuid4(),
+                        org_id=org_uuid_list,
+                        name=list_name,
+                        description=f"{len(businesses)} {industry} businesses in {location} (found {now})",
+                        lead_count=0,
+                        is_archived=False,
+                    )
+                    context.db_session.add(new_ll)
+                    await context.db_session.flush()
+                    list_id = str(new_ll.id)
+
+                # Step 4: Update list_id on lead rows
+                if saved_ids and list_id:
+                    from sqlalchemy import text as sa_text
+                    for lid in saved_ids:
+                        stmt = sa_text("UPDATE leads SET list_id = CAST(:list_id AS UUID), "
+                                       "updated_at = CAST(:now AS TIMESTAMP) WHERE id = CAST(:id AS UUID)")
+                        await context.db_session.execute(stmt.bindparams(list_id=list_id, now=now, id=lid))
+
+                    # Update lead count
+                    lead_count_result = await context.db_session.execute(
+                        select(DBLeadList).where(DBLeadList.id == _uuid.UUID(list_id))
+                    )
+                    db_ll = lead_count_result.scalar_one_or_none()
+                    if db_ll:
+                        count_result = await context.db_session.execute(
+                            select(Lead).where(Lead.list_id == _uuid.UUID(list_id))
+                        )
+                        db_ll.lead_count = len(count_result.all())
                     await context.db_session.commit()
-                except Exception:
-                    await context.db_session.rollback()
 
             # Step 5: Reserve if requested
             reserve_info = {}
-            if should_reserve and context and context.db_session and context.org_id:
+            if should_reserve and context and context.db_session and context.org_id and list_id:
                 import uuid as _ruid
                 campaign_id = _ruid.uuid4()
                 from app.database.models import Campaign
-                org_uuid = _ruid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                org_uuid_rsv = _ruid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
                 campaign = Campaign(
                     id=campaign_id,
-                    org_id=org_uuid,
+                    org_id=org_uuid_rsv,
                     name=campaign_name,
                     channel="lead_list",
                     message_template="{{message}}",

@@ -132,52 +132,60 @@ class Heraclitus(BaseAgent):
                 result["leads_created"] = len(created)
                 result["leads"] = created[:20]
 
-            # Create lead list if list_name was provided
+            # Create lead list if list_name was provided (DB-backed)
             list_name = args.get("list_name")
             list_id = None
-            if list_name and saved_ids:
+            if list_name and saved_ids and context and context.db_session and context.org_id:
                 import uuid as _uuid
-                from app.routers.lead_lists import LEAD_LISTS, LEAD_LIST_ITEMS
+                from app.database.models import LeadList as DBLeadList
+                from sqlalchemy import select
+                org_uuid = _uuid.UUID(str(context.org_id)) if isinstance(context.org_id, str) else context.org_id
+                now = datetime.now(timezone.utc).isoformat()
 
                 # Check if a list with this name already exists for this org
-                org_id_str = str(context.org_id) if context and context.org_id else ""
-                for existing_id, existing in list(LEAD_LISTS.items()):
-                    if existing.get("name") == list_name and existing.get("org_id") == org_id_str:
-                        list_id = existing_id
-                        break
+                existing_result = await context.db_session.execute(
+                    select(DBLeadList).where(
+                        DBLeadList.org_id == org_uuid,
+                        DBLeadList.name == list_name,
+                        DBLeadList.is_archived == False,
+                    )
+                )
+                existing_ll = existing_result.scalar_one_or_none()
 
-                if list_id:
-                    # Add to existing list
-                    existing_items = set(LEAD_LIST_ITEMS.get(list_id, []))
-                    for lid in saved_ids:
-                        if lid not in existing_items:
-                            existing_items.add(lid)
-                    LEAD_LIST_ITEMS[list_id] = list(existing_items)
-                    LEAD_LISTS[list_id]["lead_count"] = len(existing_items)
-                    LEAD_LISTS[list_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                if existing_ll:
+                    list_id = str(existing_ll.id)
                 else:
-                    # Create new list
-                    list_id = str(_uuid.uuid4())
-                    now = datetime.now(timezone.utc).isoformat()
-                    entry = {
-                        "id": list_id,
-                        "org_id": org_id_str,
-                        "name": list_name,
-                        "description": f"{len(businesses)} {industry} businesses in {location} (found {now})",
-                        "created_by": org_id_str,
-                        "lead_count": len(saved_ids),
-                        "is_archived": False,
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                    LEAD_LISTS[list_id] = entry
-                    LEAD_LIST_ITEMS[list_id] = list(saved_ids)
+                    # Create new list in DB
+                    new_ll = DBLeadList(
+                        id=_uuid.uuid4(),
+                        org_id=org_uuid,
+                        name=list_name,
+                        description=f"{len(saved_ids)} leads from automated research",
+                        lead_count=0,
+                        is_archived=False,
+                    )
+                    context.db_session.add(new_ll)
+                    await context.db_session.flush()
+                    list_id = str(new_ll.id)
 
+                # Update list_id on lead rows
                 from sqlalchemy import text as sa_text
                 for lid in saved_ids:
                     await context.db_session.execute(sa_text(
-                        "UPDATE leads SET list_id = :lid, updated_at = :now WHERE id = :id"
-                    ).bindparams(lid=list_id, now=datetime.now(timezone.utc).isoformat(), id=lid))
+                        "UPDATE leads SET list_id = CAST(:lid AS UUID), updated_at = CAST(:now AS TIMESTAMP) WHERE id = CAST(:id AS UUID)"
+                    ).bindparams(lid=list_id, now=now, id=lid))
+
+                # Update lead count
+                count_result = await context.db_session.execute(
+                    select(Lead).where(Lead.list_id == _uuid.UUID(list_id))
+                )
+                db_ll = await context.db_session.execute(
+                    select(DBLeadList).where(DBLeadList.id == _uuid.UUID(list_id))
+                )
+                ll_row = db_ll.scalar_one_or_none()
+                if ll_row:
+                    ll_row.lead_count = len(count_result.all())
+
                 await context.db_session.commit()
                 result["lead_list_id"] = list_id
                 result["lead_list_name"] = list_name
@@ -187,7 +195,6 @@ class Heraclitus(BaseAgent):
                     campaign_id = str(_uuid.uuid4())
                     campaign_name = args.get("campaign_name", f"Beast Mode: {list_name}")
                     from app.database.models import Campaign
-                    org_uuid = _uuid.UUID(str(context.org_id)) if isinstance(context.org_id, str) else context.org_id
                     campaign = Campaign(
                         id=_uuid.UUID(campaign_id),
                         org_id=org_uuid,
@@ -219,6 +226,15 @@ class Heraclitus(BaseAgent):
 
 async def save_businesses_as_leads(db_session, org_id, businesses: list[dict], industry: str) -> list[dict]:
     """Create Lead records from discovered businesses, skipping names already logged."""
+    import uuid as _uuid
+    # Ensure org_id is a UUID object, not a string
+    if isinstance(org_id, str):
+        try:
+            org_id = _uuid.UUID(org_id)
+        except ValueError:
+            org_id = None
+    if org_id is None:
+        return []
     existing = await db_session.execute(
         select(func.lower(Lead.name)).where(Lead.org_id == org_id)
     )

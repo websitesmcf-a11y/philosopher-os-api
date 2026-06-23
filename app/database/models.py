@@ -258,6 +258,24 @@ class Campaign(Base, TimestampMixin):
 class CampaignLead(Base):
     __tablename__ = "campaign_leads"
 
+
+# ─── Lead Lists ──────────────────────────────────────────────────
+
+class LeadList(Base, TimestampMixin):
+    """Persistent lead list — replaces the old in-memory LEAD_LISTS dict."""
+    __tablename__ = "lead_lists"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, default="")
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    lead_count = Column(Integer, default=0)
+    is_archived = Column(Boolean, default=False)
+    locked = Column(Boolean, default=False)
+    locked_by = Column(String(255), nullable=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True)
     lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
     status = Column(String(50), default="pending")
