@@ -1,4 +1,6 @@
-"""Auth dependencies: Clerk JWT verification with TTL-cached JWKS, user + org extraction."""
+"""Auth dependencies: Clerk JWT verification with TTL-cached JWKS, user + org extraction.
+Supports both httpOnly cookies (preferred) and Authorization: Bearer header (legacy).
+"""
 
 import time
 import httpx
@@ -14,6 +16,9 @@ from app.database.models import OrgMember
 logger = logging.getLogger(__name__)
 security_scheme = HTTPBearer(auto_error=False)
 
+AUTH_COOKIE_NAME = "auth_token"
+AUTH_COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 days
+
 # JWKS cache with TTL
 _jwks_cache: dict | None = None
 _jwks_cache_time: float = 0
@@ -26,7 +31,7 @@ async def get_jwks() -> dict:
     if _jwks_cache and (now - _jwks_cache_time) < JWKS_CACHE_TTL:
         return _jwks_cache
     async with httpx.AsyncClient() as client:
-        resp = await client.get(settings.clerk_jwks_url)  # type: ignore
+        resp = await client.get(settings.clerk_jwks_url)
         resp.raise_for_status()
         _jwks_cache = resp.json()
         _jwks_cache_time = now
@@ -67,7 +72,6 @@ async def verify_clerk_token(token: str) -> dict | None:
 
 
 # Default identity when running without Clerk in non-production environments.
-# Matches the org seeded by scripts/seed.py so the dashboard shows real data.
 DEV_USER = {
     "id": "00000000-0000-0000-0000-000000000010",
     "email": "dev@localhost",
@@ -77,24 +81,17 @@ DEV_USER = {
 
 
 def _auth_disabled() -> bool:
-    """True when Clerk isn't configured — fall back to local auth so the app works
-    without a Clerk account in any environment (dev or production)."""
+    """True when Clerk isn't configured — fall back to local auth."""
     return not settings.clerk_secret_key
 
 
 def _decode_local_token(token: str) -> dict | None:
-    """Decode a locally-signed JWT (issued by _issue_local_token).
-
-    Returns the payload dict on success, None on failure.
-    """
+    """Decode a locally-signed JWT (issued by _issue_local_token)."""
     try:
         from jose import jwt
         secret = settings.encryption_key or "socrates-local-dev-secret"
         payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            options={"verify_exp": True},
+            token, secret, algorithms=["HS256"], options={"verify_exp": True},
         )
         return payload
     except Exception as e:
@@ -102,17 +99,60 @@ def _decode_local_token(token: str) -> dict | None:
         return None
 
 
+def _extract_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str | None:
+    """Extract JWT from httpOnly cookie first, then fall back to Authorization header.
+
+    Cookie takes precedence because it's httpOnly (not readable from JS).
+    This allows a gradual migration while both are supported.
+    """
+    # 1. Try cookie (httpOnly, Secure, SameSite)
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if token:
+        return token
+    # 2. Fall back to Authorization: Bearer header (legacy)
+    if credentials:
+        return credentials.credentials
+    return None
+
+
+def set_auth_cookie(response, token: str) -> None:
+    """Set the httpOnly, Secure, SameSite=Lax auth cookie on a response."""
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        path="/",
+    )
+
+
+def clear_auth_cookie(response) -> None:
+    """Clear the auth cookie (for logout)."""
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=True,
+    )
+
+
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ) -> dict:
-    """Dependency that extracts and verifies the current user from Clerk JWT
-    or locally-signed JWT (when Clerk is not configured)."""
+    """Dependency that extracts and verifies the current user from:
+    1. httpOnly cookie (preferred)
+    2. Authorization: Bearer header (legacy fallback)
+    """
+    token = _extract_token(request, credentials)
+
     if _auth_disabled():
-        # No token at all → fall back to DEV_USER so health checks / local dev work
-        if not credentials:
+        if not token:
             return dict(DEV_USER)
-        # Token provided → decode locally to get the real user
-        payload = _decode_local_token(credentials.credentials)
+        payload = _decode_local_token(token)
         if payload:
             return {
                 "id": payload.get("user_id", payload.get("sub", "")),
@@ -120,13 +160,12 @@ async def get_current_user(
                 "name": payload.get("name", ""),
                 "org_id": payload.get("org_id", ""),
             }
-        # Token invalid → fall back to DEV_USER (resilient for local dev)
         return dict(DEV_USER)
 
-    if not credentials:
+    if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    payload = await verify_clerk_token(credentials.credentials)
+    payload = await verify_clerk_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -139,13 +178,16 @@ async def get_current_user(
 
 
 async def get_optional_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ) -> dict | None:
     """Like get_current_user but doesn't error if no token."""
+    token = _extract_token(request, credentials)
+
     if _auth_disabled():
-        if not credentials:
+        if not token:
             return None
-        payload = _decode_local_token(credentials.credentials)
+        payload = _decode_local_token(token)
         if payload:
             return {
                 "id": payload.get("user_id", payload.get("sub", "")),
@@ -155,9 +197,9 @@ async def get_optional_user(
             }
         return None
 
-    if not credentials:
+    if not token:
         return None
-    payload = await verify_clerk_token(credentials.credentials)
+    payload = await verify_clerk_token(token)
     if payload:
         return {
             "id": payload.get("sub", ""),

@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import random
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.config import settings
@@ -12,12 +13,56 @@ from app.services.user_service import UserService
 
 router = APIRouter()
 
+# ─── Rate limiting for auth endpoints ──────────────────────────
+# 5 attempts per 15 min per IP+email combo
+_AUTH_RATE_LIMIT: dict[str, list[float]] = {}
+AUTH_RATE_MAX = 5
+AUTH_RATE_WINDOW = 900  # 15 minutes
+
+
+def _check_auth_rate_limit(ip: str, email: str) -> None:
+    """Check and record an auth attempt. Raises 429 if over limit."""
+    now = time.time()
+    window_start = now - AUTH_RATE_WINDOW
+    key = f"{ip}:{email}"
+    if key in _AUTH_RATE_LIMIT:
+        _AUTH_RATE_LIMIT[key] = [t for t in _AUTH_RATE_LIMIT[key] if t > window_start]
+    else:
+        _AUTH_RATE_LIMIT[key] = []
+    if len(_AUTH_RATE_LIMIT[key]) >= AUTH_RATE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts. Try again in {AUTH_RATE_WINDOW // 60} minutes.",
+        )
+    _AUTH_RATE_LIMIT[key].append(now)
+
+
 # ─── 2FA temporary code storage ─────────────────────────────
 # Maps email -> { code, expires_at, used }
 _two_factor_codes: dict[str, dict] = {}
 
 
-def _generate_2fa_code() -> str:
+async def _check_password_strength(password: str) -> str | None:
+    """Check password strength. Returns an error message or None if OK."""
+    if len(password) < 12:
+        return "Password must be at least 12 characters"
+    # Check against HaveIBeenPwned via k-anonymity API
+    import hashlib
+    sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
+    prefix, suffix = sha1[:5], sha1[5:]
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"https://api.pwnedpasswords.com/range/{prefix}")
+            if resp.status_code == 200:
+                for line in resp.text.splitlines():
+                    if line.startswith(suffix):
+                        count = int(line.split(":")[1].strip())
+                        if count > 0:
+                            return f"Password has been exposed in {count} data breach(es). Choose a different password."
+    except Exception:
+        pass  # Skip breach check if API is unreachable
+    return None
     return str(random.randint(100000, 999999))
 
 
@@ -51,20 +96,40 @@ async def _get_user_phone(email: str, db: AsyncSession) -> str | None:
 
 
 async def _is_2fa_enabled(email: str, db: AsyncSession) -> bool:
-    """Check if 2FA is enabled for a user."""
+    """Check if 2FA should be required for this user.
+
+    2FA is auto-enabled when the user has a connected WhatsApp session.
+    No separate opt-in needed — if WhatsApp is linked, login sends a code.
+    """
+    from app.database.models import Integration
+    # Check if WhatsApp is connected (this enables 2FA automatically)
+    wa_result = await db.execute(
+        select(Integration).where(
+            Integration.provider == "whatsapp",
+            Integration.status == "connected",
+        )
+    )
+    wa_row = wa_result.scalar_one_or_none()
+    if wa_row and wa_row.config:
+        phone = (wa_row.config or {}).get("phone", "") or (wa_row.config or {}).get("session_phone", "")
+        if phone:
+            return True
+    return False
+
+
+async def _get_whatsapp_phone(db: AsyncSession) -> str:
+    """Get the WhatsApp phone number from the connected session."""
     from app.database.models import Integration
     result = await db.execute(
         select(Integration).where(
-            Integration.provider == "two_factor_auth",
+            Integration.provider == "whatsapp",
             Integration.status == "connected",
         )
     )
     row = result.scalar_one_or_none()
-    if not row:
-        return False
-    cfg = row.config or {}
-    # Accept any email that has 2FA enabled (single-user dev mode)
-    return cfg.get("enabled") == True
+    if row:
+        return (row.config or {}).get("phone", "") or (row.config or {}).get("session_phone", "")
+    return ""
 
 
 def _issue_local_token(email: str, name: str, user_id: str = "", org_id: str = "") -> str:
@@ -87,24 +152,32 @@ def _issue_local_token(email: str, name: str, user_id: str = "", org_id: str = "
 
 
 @router.post("/login")
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     """Password login with optional 2FA support.
 
     If 2FA is enabled for this account, returns a 2FA challenge instead
     of a token. The frontend then calls /auth/2fa/verify to complete login.
+    Sets an httpOnly cookie on success so the token is never in JS-accessible storage.
     """
+    from app.core.security import set_auth_cookie
     # Allow local auth in all environments (Clerk is optional)
     from passlib.hash import bcrypt
     from app.database.models import User, Integration
     from sqlalchemy import select
+
+    # Rate limit: 5 attempts per 15 min per IP+email
+    client_ip = request.client.host if request.client else "unknown"
+    _check_auth_rate_limit(client_ip, req.email)
 
     # First check the dev admin
     if req.email == settings.dev_admin_email and req.password == settings.dev_admin_password:
         twofa = await _is_2fa_enabled(req.email, db)
         if twofa:
             return {"twofa_required": True, "email": req.email, "message": "2FA is enabled"}
+        token = _issue_local_token(req.email, "Admin", org_id="00000000-0000-0000-0000-000000000001")
+        set_auth_cookie(response, token)
         return {
-            "access_token": _issue_local_token(req.email, "Admin", org_id="00000000-0000-0000-0000-000000000001"),
+            "access_token": token,
             "token_type": "bearer",
             "user": {"email": req.email, "name": "Admin", "role": "admin", "org_id": "00000000-0000-0000-0000-000000000001"},
         }
@@ -127,6 +200,13 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not stored_hash or not bcrypt.verify(req.password, stored_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    # Check email verification
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Email not verified. Please check your inbox for the verification link.",
+        )
+
     # Check 2FA
     twofa = await _is_2fa_enabled(req.email, db)
     if twofa:
@@ -139,12 +219,14 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     )
     om_row = om_result.scalar_one_or_none()
     org_id = str(om_row) if om_row else ""
+    token = _issue_local_token(
+        req.email, user.name or "User",
+        user_id=str(user.id), org_id=org_id,
+    )
+    set_auth_cookie(response, token)
 
     return {
-        "access_token": _issue_local_token(
-            req.email, user.name or "User",
-            user_id=str(user.id), org_id=org_id,
-        ),
+        "access_token": token,
         "token_type": "bearer",
         "user": {
             "email": user.email, "name": user.name,
@@ -183,54 +265,8 @@ async def get_current_user_endpoint(
 # ─── 2FA Endpoints ──────────────────────────────────────────
 
 
-@router.post("/2fa/send-code")
-async def send_2fa_code(data: dict, db: AsyncSession = Depends(get_db)):
-    """Send a 2FA verification code to the user's WhatsApp."""
-    email = data.get("email", "")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email required")
-
-    # Get phone number from 2FA settings
-    from app.database.models import Integration
-    result = await db.execute(
-        select(Integration).where(
-            Integration.provider == "two_factor_auth",
-            Integration.status == "connected",
-        )
-    )
-    row = result.scalar_one_or_none()
-    if not row:
-        raise HTTPException(status_code=400, detail="2FA not enabled for this account")
-    cfg = row.config or {}
-    if not cfg.get("enabled"):
-        raise HTTPException(status_code=400, detail="2FA not enabled for this account")
-
-    phone = cfg.get("phone", "")
-    if not phone:
-        raise HTTPException(status_code=400, detail="No WhatsApp phone number configured for 2FA")
-
-    # Generate and store code
-    code = _generate_2fa_code()
-    _two_factor_codes[email] = {
-        "code": code,
-        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
-        "used": False,
-    }
-
-    # Send via WhatsApp
-    sent = await _send_whatsapp(
-        phone,
-        f"🔐 Socrates AI verification code: {code}\n\nThis code expires in 5 minutes. Never share this with anyone.",
-    )
-
-    if sent:
-        return {"status": "sent", "message": "Verification code sent to your WhatsApp"}
-    else:
-        raise HTTPException(status_code=502, detail="Failed to send WhatsApp message — check wa-bot connection")
-
-
 @router.post("/2fa/verify")
-async def verify_2fa(data: dict, db: AsyncSession = Depends(get_db)):
+async def verify_2fa(data: dict, response: Response, db: AsyncSession = Depends(get_db)):
     """Verify a 2FA code and issue a login token."""
     email = data.get("email", "")
     code = data.get("code", "")
@@ -268,8 +304,12 @@ async def verify_2fa(data: dict, db: AsyncSession = Depends(get_db)):
         om_row = om_result.scalar_one_or_none()
         org_id = str(om_row) if om_row else ""
 
+    from app.core.security import set_auth_cookie
+    token = _issue_local_token(email, user.name if user else "Admin", user_id=user_id, org_id=org_id)
+    set_auth_cookie(response, token)
+
     return {
-        "access_token": _issue_local_token(email, user.name if user else "Admin", user_id=user_id, org_id=org_id),
+        "access_token": token,
         "token_type": "bearer",
         "user": {"email": email, "name": user.name if user else "Admin", "role": "admin", "org_id": org_id},
     }
@@ -491,7 +531,7 @@ async def get_invite(
 
 @router.post("/register")
 @router.post("/signup")
-async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def signup(req: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     """Create a new user account with email and password.
 
     Each signup gets a fresh, isolated organization so users never
@@ -506,8 +546,9 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
         if not req.email or not req.password:
             raise HTTPException(status_code=400, detail="Email and password required")
-        if len(req.password) < 6:
-            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        pw_error = await _check_password_strength(req.password)
+        if pw_error:
+            raise HTTPException(status_code=400, detail=pw_error)
 
         # Check if user exists
         from sqlalchemy import select
@@ -540,12 +581,17 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         # IMPORTANT: Flush user FIRST so its row exists in Postgres BEFORE
         # org_member tries to reference it via FK. The async session does NOT
         # guarantee SQLAlchemy auto-ordering with asyncpg.
+        import secrets
+        verify_token = secrets.token_urlsafe(32)
         user = User(
             id=user_id,
             email=req.email,
             name=req.name or req.email.split("@")[0],
             clerk_id=str(user_id),
             avatar_url=None,
+            email_verified=False,
+            email_verify_token=verify_token,
+            email_verify_token_expires=datetime.now(timezone.utc) + timedelta(days=3),
         )
         db.add(user)
         await db.flush()
@@ -591,11 +637,17 @@ async def signup(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
         # Do NOT commit here — get_db() handles the final commit on success.
         # Avoids "no transaction in progress" on Postgres from double-commit.
-        return {
-            "message": "Account created",
+        # Try to send verification email
+        email_sent = await _send_verification_email(user.email, verify_token, user.name)
+        result = {
+            "message": "Account created. Please verify your email." if email_sent else "Account created.",
             "user": {"id": str(user.id), "email": user.email, "name": user.name},
             "org": {"id": str(org_id), "name": "Your Workspace"},
         }
+        if not email_sent:
+            # SMTP not configured — return token in response for dev/testing
+            result["verification_token"] = verify_token
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -618,8 +670,9 @@ async def change_password(
     new = data.get("new_password", "")
     if not current or not new:
         raise HTTPException(status_code=400, detail="Current and new password required")
-    if len(new) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    pw_error = await _check_password_strength(new)
+    if pw_error:
+        raise HTTPException(status_code=400, detail=pw_error)
 
     user_id = user.get("id", "")
     result = await db.execute(
@@ -640,8 +693,146 @@ async def change_password(
 
 
 @router.post("/logout")
-async def logout():
+async def logout(response: Response):
+    from app.core.security import clear_auth_cookie
+    clear_auth_cookie(response)
     return {"message": "Logged out"}
+
+
+# ─── Email Verification ─────────────────────────────────────────
+
+
+async def _send_verification_email(email: str, token: str, name: str) -> bool:
+    """Send a verification email via configured SMTP. Returns True if sent."""
+    if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
+        return False  # SMTP not configured — token will be returned in API response (dev mode)
+    from app.integrations.smtp_email import smtp_send
+    verify_url = f"https://philosopher-os.vercel.app/verify-email?token={token}"
+    try:
+        import asyncio
+        await asyncio.to_thread(
+            smtp_send,
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_user,
+            password=settings.smtp_password,
+            to=[email],
+            subject="Verify your Philosopher OS email",
+            html=f"""
+            <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+                <h2 style="color: #1A1A2E;">Welcome to Philosopher OS</h2>
+                <p>Hi {name},</p>
+                <p>Click the button below to verify your email address:</p>
+                <a href="{verify_url}"
+                   style="display: inline-block; padding: 12px 28px; margin: 20px 0;
+                          background: linear-gradient(135deg, #C9A24D, #B8943A);
+                          color: #1A1A2E; text-decoration: none; border-radius: 8px;
+                          font-weight: 700; font-size: 14px;">
+                    Verify Email
+                </a>
+                <p style="color: #666; font-size: 12px;">Or paste this link: {verify_url}</p>
+                <p style="color: #999; font-size: 11px;">This link expires in 3 days.</p>
+            </div>
+            """,
+            text=f"Welcome to Philosopher OS!\n\nVerify your email: {verify_url}\n\nThis link expires in 3 days.",
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to send verification email to {email}: {e}")
+        return False
+
+
+@router.post("/verify-email")
+async def verify_email(data: dict, db: AsyncSession = Depends(get_db)):
+    """Verify a user's email address using the token from the signup response."""
+    token = data.get("token", "")
+    if not token:
+        raise HTTPException(status_code=400, detail="Verification token required")
+
+    from app.database.models import User as UserModel
+    result = await db.execute(
+        select(UserModel).where(
+            UserModel.email_verify_token == token,
+            UserModel.email_verified == False,
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+
+    now = datetime.now(timezone.utc)
+    if user.email_verify_token_expires and now > user.email_verify_token_expires:
+        raise HTTPException(status_code=400, detail="Verification token has expired. Request a new one.")
+
+    user.email_verified = True
+    user.email_verify_token = None
+    user.email_verify_token_expires = None
+    await db.flush()
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/resend-verification")
+async def resend_verification(data: dict, db: AsyncSession = Depends(get_db)):
+    """Resend the verification token for a user's email."""
+    email = data.get("email", "")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    import secrets
+    from app.database.models import User as UserModel
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        # Don't reveal if email exists
+        return {"message": "If the email exists, a verification link has been sent."}
+    if user.email_verified:
+        return {"message": "Email is already verified"}
+
+    user.email_verify_token = secrets.token_urlsafe(32)
+    user.email_verify_token_expires = datetime.now(timezone.utc) + timedelta(days=3)
+    await db.flush()
+
+    email_sent = await _send_verification_email(user.email, user.email_verify_token, user.name)
+    result = {"message": "If the email exists, a verification link has been sent."}
+    if not email_sent:
+        result["verification_token"] = user.email_verify_token
+    return result
+
+
+# ─── 2FA via WhatsApp (auto-enabled when WhatsApp is connected) ──
+
+
+@router.post("/2fa/send-code")
+async def send_2fa_code(data: dict, db: AsyncSession = Depends(get_db)):
+    """Send a 2FA verification code via WhatsApp.
+
+    Auto-detects the phone number from the connected WhatsApp session.
+    """
+    email = data.get("email", "")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    # Get phone from WhatsApp connection
+    phone = await _get_whatsapp_phone(db)
+    if not phone:
+        raise HTTPException(status_code=400, detail="WhatsApp not connected. Cannot send 2FA code.")
+
+    code = _generate_2fa_code()
+    _two_factor_codes[email] = {
+        "code": code,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
+        "used": False,
+    }
+
+    sent = await _send_whatsapp(
+        phone,
+        f"Your Philosopher OS verification code: {code}\n\nThis code expires in 5 minutes. Never share this with anyone.",
+    )
+
+    if sent:
+        return {"status": "sent", "message": "Verification code sent to your WhatsApp"}
+    else:
+        raise HTTPException(status_code=502, detail="Failed to send WhatsApp message")
 
 
 # ─── Google OAuth Sign-In ──────────────────────────────────────
