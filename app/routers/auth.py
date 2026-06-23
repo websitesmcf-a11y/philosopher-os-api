@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime, timedelta, timezone
 import random
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.config import settings
