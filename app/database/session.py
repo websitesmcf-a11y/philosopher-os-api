@@ -54,6 +54,32 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database schema ensured (create_all)")
 
+    # ── Migrations (columns added after initial schema) ──────────────
+    try:
+        if IS_SQLITE:
+            for col, coltype in [
+                ("email_verified", "BOOLEAN DEFAULT 0"),
+                ("email_verify_token", "VARCHAR(255)"),
+                ("email_verify_token_expires", "TIMESTAMP"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {coltype}"))
+                except Exception:
+                    pass  # Column already exists
+        else:
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token VARCHAR(255)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token_expires TIMESTAMP WITH TIME ZONE"
+            ))
+        logger.info("Database migrations applied (email_verified columns)")
+    except Exception as e:
+        logger.warning(f"Could not run migrations: {e}")
+
     # Seed default org if not exists (needed for beast mode / dev flows)
     try:
         async with async_session() as session:
