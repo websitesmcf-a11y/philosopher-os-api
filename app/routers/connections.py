@@ -371,6 +371,89 @@ async def obsidian_sync(
         raise HTTPException(status_code=500, detail=f"Obsidian sync failed: {e}")
 
 
+@router.post("/graphify/run")
+async def run_graphify(
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Run graphify on all knowledge articles, return insights, and optionally write
+    an Obsidian Canvas file to the configured vault path."""
+    import tempfile
+    from pathlib import Path
+    from sqlalchemy import select as sa_select
+    from app.database.models import KnowledgeBase
+
+    org_uuid = uuid.UUID(org_id) if isinstance(org_id, str) else org_id
+
+    # Get saved vault path (optional)
+    gfy_row_result = await db.execute(
+        sa_select(Integration).where(
+            Integration.provider == "graphify",
+            Integration.org_id == org_uuid,
+        )
+    )
+    gfy_row = gfy_row_result.scalar_one_or_none()
+    vault_path = (gfy_row.config or {}).get("vault_path", "").strip() if gfy_row else ""
+
+    # Fetch knowledge entries
+    kb_result = await db.execute(
+        sa_select(KnowledgeBase).where(KnowledgeBase.org_id == org_uuid)
+    )
+    entries = kb_result.scalars().all()
+    if not entries:
+        raise HTTPException(status_code=400, detail="No knowledge articles to process — add some first")
+
+    try:
+        import graphify as gfy  # type: ignore
+    except ImportError:
+        raise HTTPException(status_code=500, detail="graphifyy not installed — add graphifyy to requirements.txt")
+
+    # Write knowledge entries to a temp directory as markdown files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for entry in entries:
+            safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in (entry.title or "untitled"))
+            fp = Path(tmpdir) / f"{safe[:80]}.md"
+            md = f"# {entry.title}\n\n{entry.content or ''}\n"
+            if entry.tags:
+                md += f"\n**Tags**: {', '.join(entry.tags)}\n"
+            if entry.category:
+                md += f"**Category**: {entry.category}\n"
+            fp.write_text(md, encoding="utf-8")
+
+        # Run graphify pipeline
+        nodes, edges = gfy.extract(tmpdir)
+        graph = gfy.build_from_json({"nodes": nodes, "edges": edges})
+        clustered = gfy.cluster(graph)
+
+        god_nodes = gfy.god_nodes(clustered)[:5]
+        connections = gfy.surprising_connections(clustered)[:5]
+        questions = gfy.suggest_questions(clustered)[:5]
+
+        # Write canvas to Obsidian vault if path is set and reachable
+        canvas_written = False
+        if vault_path:
+            try:
+                canvas_dir = Path(vault_path) / "Socrates AI"
+                canvas_dir.mkdir(parents=True, exist_ok=True)
+                gfy.to_canvas(clustered, str(canvas_dir / "knowledge-graph.canvas"))
+                canvas_written = True
+            except Exception as exc:
+                logger.warning("Could not write graphify canvas to vault: %s", exc)
+
+    return {
+        "articles_processed": len(entries),
+        "graph_nodes": len(nodes),
+        "graph_edges": len(edges),
+        "canvas_written": canvas_written,
+        "insights": {
+            "god_nodes": god_nodes,
+            "surprising_connections": connections,
+            "suggested_questions": questions,
+        },
+    }
+
+
 class ConnectionPayload(BaseModel):
     secrets: dict[str, str] = {}
     config: dict[str, str] = {}

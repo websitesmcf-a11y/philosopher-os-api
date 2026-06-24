@@ -85,6 +85,13 @@ PROVIDERS: dict[str, dict] = {
         "config": ["vault_path"],
         "docs": "Enter the absolute path of your Obsidian vault folder (e.g. C:\\Users\\you\\Documents\\MyVault). Files are written under 'Socrates AI/' inside the vault.",
     },
+    "graphify": {
+        "label": "Graphify",
+        "description": "Build a semantic knowledge graph from your articles and export an Obsidian Canvas file.",
+        "secrets": [],
+        "config": ["vault_path"],
+        "docs": "Optionally provide your Obsidian vault path so graphify can write a .canvas file there. Leave blank to only generate insights in the web app.",
+    },
     "anthropic": {
         "label": "Anthropic Claude",
         "description": "Primary LLM provider for the AI council.",
