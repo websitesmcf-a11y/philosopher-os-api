@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+# Build timestamp forces cache invalidation: 2026-06-24T17:00
+ARG BUILD_TIMESTAMP=2026-06-24T17:00
+
 # Install Chromium + dependencies for cloud browser automation
 # playwright-deps includes system libs; chromium-browser provides the binary
 RUN apt-get update && apt-get install -y --no-install-recommends \
