@@ -7,16 +7,11 @@ from app.agents.base import BaseAgent, AgentContext, AgentActionResult, ToolEven
 _PHONE_RE = re.compile(
     r'\b(\+27[0-9\s\-]{8,12}|27[0-9\s\-]{8,12}|0[6-8][0-9\s\-]{7,11})\b'
 )
-_SEND_WORDS = frozenset([
-    'send', 'message', 'msg', 'whatsapp', 'wa', 'text',
-    'tell', 'say', 'drop', 'ping', 'reach', 'notify', 'hit',
-    'write', 'chat', 'contact', 'forward',
-])
-# Words that mean the user wants a lookup, NOT a send
-_LOOKUP_ONLY = frozenset(['find', 'search', 'look up', 'lookup', 'exists', 'does', 'who is'])
 
 
 def _extract_phone(text: str) -> str | None:
+    if not text:
+        return None
     m = _PHONE_RE.search(text)
     if m:
         return re.sub(r'[\s\-]', '', m.group(0))
@@ -32,10 +27,14 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
-def _phone_in_history(context) -> str | None:
+def _ctx_phone(context) -> str | None:
+    """Find a phone number in the current message or conversation history."""
     if not context:
         return None
-    for msg in reversed(context.conversation_history or []):
+    p = _extract_phone(getattr(context, "user_input", "") or "")
+    if p:
+        return p
+    for msg in reversed(getattr(context, "conversation_history", None) or []):
         p = _extract_phone(msg.get("content", ""))
         if p:
             return p
@@ -46,7 +45,7 @@ class Stilbon(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
     LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
 
-    # Don't let the LLM do a connection check before every send — _do_send handles that
+    # Prevent the LLM from doing a connection check before every send
     EXCLUDED_COMMON_TOOLS = {"check_integration"}
 
     def __init__(self):
@@ -56,13 +55,13 @@ class Stilbon(BaseAgent):
             system_prompt=(
                 "You are Stilbon, the swift messenger god. You send WhatsApp messages.\n\n"
                 "WHEN THE USER GIVES A PHONE NUMBER:\n"
-                "→ Call send_whatsapp_direct immediately with that number and the message.\n"
-                "→ No CRM record needed. No lead required. Any number works.\n\n"
+                "→ Call send_whatsapp_direct IMMEDIATELY with that number.\n"
+                "→ No CRM check. No lead required. Just send.\n\n"
                 "WHEN THE USER GIVES A NAME BUT NO NUMBER:\n"
-                "→ Call find_lead_by_name. If found, use the phone. If not, ask for the number.\n\n"
-                "RULES:\n"
-                "- NEVER redirect to odysseus or any other agent for direct WhatsApp sends.\n"
-                "- NEVER say you need a CRM entry or lead_id to send to a phone number.\n"
+                "→ Call find_lead_by_name. Use the phone that comes back.\n\n"
+                "ABSOLUTE RULES:\n"
+                "- NEVER redirect to odysseus or any other agent for a direct send.\n"
+                "- NEVER say 'I need a lead record' when a phone number is available.\n"
                 "- Instagram DMs are not possible via API — offer WhatsApp instead.\n"
                 "- Report the real result. Never claim sent if the tool returned failed."
             ),
@@ -74,22 +73,33 @@ class Stilbon(BaseAgent):
             {
                 "name": "send_whatsapp_direct",
                 "description": (
-                    "Send a WhatsApp message to any phone number. "
-                    "No CRM record or lead_id needed. "
-                    "Works with any format: 0730150646, 073 015 0646, +27730150646."
+                    "Send a WhatsApp message to ANY phone number. "
+                    "No CRM record needed, no lead_id needed. "
+                    "Works with 0730150646, 073 015 0646, +27730150646."
                 ),
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "phone": {"type": "string", "description": "Phone number (any SA or international format)"},
-                        "message": {"type": "string", "description": "Message text to send"},
+                        "phone": {"type": "string"},
+                        "message": {"type": "string"},
                     },
                     "required": ["phone", "message"],
                 },
             },
             {
+                "name": "find_lead_by_name",
+                "description": "Look up a contact by name. Returns their phone number so you can send to them.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                    },
+                    "required": ["name"],
+                },
+            },
+            {
                 "name": "send_whatsapp",
-                "description": "Send WhatsApp to a CRM lead using their lead_id.",
+                "description": "Send WhatsApp to a CRM lead by their lead_id.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -114,63 +124,72 @@ class Stilbon(BaseAgent):
             },
         ]
 
-    # ── Python fast-path ───────────────────────────────────────────────────────
+    # ── Layer 1: Python fast-path in think_stream (streaming) ──────────────────
 
     async def think_stream(
         self, context: AgentContext, on_stop: callable = None
     ) -> AsyncGenerator[str | ToolEvent, None]:
-        user_text = context.user_input
-        lower = user_text.lower()
-        phone = _extract_phone(user_text)
-
-        # Stilbon is a messaging agent. If the current message contains a phone number
-        # and doesn't look like a pure lookup query, treat it as a send request.
-        is_lookup_only = any(k in lower for k in _LOOKUP_ONLY)
-        if phone and not is_lookup_only:
-            async for chunk in self._stream_send(phone, context):
+        phone = _extract_phone(context.user_input)
+        if phone:
+            async for chunk in self._direct_send(phone, context):
                 yield chunk
             return
-
-        # Follow-up message ("do it", "try again", "go ahead") after a conversation
-        # that already had a phone number — search history.
-        has_send = any(k in lower for k in _SEND_WORDS)
-        if has_send and not phone:
-            phone = _phone_in_history(context)
-            if phone:
-                async for chunk in self._stream_send(phone, context):
-                    yield chunk
-                return
-
-        # No phone found anywhere — let the LLM handle it normally
+        # No phone in current message — let LLM handle (name lookup etc.)
         async for item in super().think_stream(context, on_stop):
             yield item
 
-    async def _stream_send(
+    # ── Layer 2: Python fast-path in run() (non-streaming) ─────────────────────
+
+    async def run(self, context: AgentContext) -> AgentActionResult:
+        phone = _extract_phone(context.user_input)
+        if phone:
+            normalized = _normalize_phone(phone)
+            try:
+                msg_resp = await self._llm_generate(
+                    system="You are Stilbon. Write ONLY the WhatsApp message text. No preamble.",
+                    messages=[{"role": "user", "content": context.user_input}],
+                    tools=None,
+                    temperature=0.7,
+                )
+                message_text = (msg_resp.content or "").strip()
+            except Exception:
+                message_text = (
+                    "Hi! I'm Stilbon, AI communication agent for Philosopher OS. "
+                    "I handle messaging, outreach, and contact management. Test message."
+                )
+            try:
+                result = await self._do_send(normalized, message_text)
+            except Exception as exc:
+                result = {"status": "failed", "error": str(exc)}
+            if result.get("status") == "sent":
+                return AgentActionResult(success=True, message=f"Sent to **{normalized}**.\n\n> {message_text}")
+            reason = result.get("reason") or result.get("error") or result.get("wa_response") or str(result)
+            return AgentActionResult(success=True, message=f"Send to {normalized} failed: {reason}")
+        return await super().run(context)
+
+    async def _direct_send(
         self, phone_raw: str, context: AgentContext
     ) -> AsyncGenerator[str | ToolEvent, None]:
-        """Compose message text then send directly — LLM is only used for prose, not tool selection."""
+        """Compose and send directly — LLM never selects tools."""
         normalized = _normalize_phone(phone_raw)
-        yield f"Sending WhatsApp to {normalized}...\n\n"
+        yield f"Sending to {normalized}...\n\n"
 
-        # Compose the message text (no tools, lightweight)
         try:
             resp = await self._llm_generate(
                 system=(
                     "You are Stilbon, AI communication agent for Philosopher OS "
                     "(messaging, outreach, contact management). "
-                    "Write ONLY the WhatsApp message text — no preamble, no quotes."
+                    "Write ONLY the WhatsApp message text. No preamble. No quotes."
                 ),
                 messages=[{
                     "role": "user",
                     "content": (
-                        f"Write the WhatsApp message based on:\n{context.user_input}\n\n"
+                        f"Write the WhatsApp message based on:\n{context.user_input}"
                         + (
-                            "Recent context:\n"
-                            + "\n".join(
+                            "\n\nRecent context:\n" + "\n".join(
                                 f"{m['role'].upper()}: {m['content'][:200]}"
                                 for m in (context.conversation_history or [])[-4:]
-                            )
-                            if context.conversation_history else ""
+                            ) if context.conversation_history else ""
                         )
                     ),
                 }],
@@ -181,8 +200,7 @@ class Stilbon(BaseAgent):
         except Exception:
             message_text = (
                 "Hi! I'm Stilbon, the AI communication agent for Philosopher OS. "
-                "I handle messaging, outreach, and contact management. "
-                "This is a test message from the system."
+                "I handle messaging, outreach, and contact management. Test message."
             )
 
         yield ToolEvent("tool_start", "send_whatsapp_direct",
@@ -199,17 +217,61 @@ class Stilbon(BaseAgent):
             reason = result.get("reason") or result.get("error") or result.get("wa_response") or str(result)
             yield f"Send to {normalized} failed: {reason}\n\nMessage drafted:\n> {message_text}"
 
-    # ── Tool execution ─────────────────────────────────────────────────────────
+    # ── Layer 3: Intercept at tool-execution level (LLM path fallback) ─────────
 
     async def _execute_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
         if tool_name == "send_whatsapp_direct":
-            phone = (args.get("phone") or "").strip()
+            phone = (args.get("phone") or "").strip() or _ctx_phone(context)
             if not phone:
-                return {"status": "error", "reason": "phone is required"}
+                return {"status": "error", "reason": "No phone number found"}
             try:
                 return await self._do_send(phone, args.get("message", ""))
-            except Exception as e:
-                return {"status": "failed", "error": str(e)}
+            except Exception as exc:
+                return {"status": "failed", "error": str(exc)}
+
+        if tool_name == "find_lead_by_name":
+            # Try actual CRM lookup first
+            name = args.get("name", "")
+            found_phone = None
+            found_name = None
+            if context and context.db_session and context.org_id:
+                from sqlalchemy import select, or_
+                from app.database.models import Lead
+                try:
+                    org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+                    rows = (await context.db_session.execute(
+                        select(Lead).where(
+                            Lead.org_id == org_uuid,
+                            or_(
+                                Lead.name.ilike(f"%{name}%"),
+                                Lead.phone.ilike(f"%{name}%"),
+                            ),
+                        ).limit(1)
+                    )).scalars().all()
+                    if rows:
+                        found_phone = rows[0].phone
+                        found_name = rows[0].name
+                except Exception:
+                    pass
+
+            if found_phone:
+                return {"status": "found", "name": found_name, "phone": found_phone,
+                        "note": "Use send_whatsapp_direct with this phone number to send."}
+
+            # Not in CRM — but if user gave a phone number, return that so LLM can use it
+            ctx_phone = _ctx_phone(context)
+            if ctx_phone:
+                return {
+                    "status": "not_in_crm",
+                    "name": name,
+                    "phone": _normalize_phone(ctx_phone),
+                    "note": (
+                        f"'{name}' is not in the CRM, but the user provided phone {_normalize_phone(ctx_phone)}. "
+                        "Call send_whatsapp_direct with this phone number now."
+                    ),
+                }
+            return {"status": "not_found", "name": name,
+                    "note": "Ask the user for a phone number, then use send_whatsapp_direct."}
 
         if tool_name == "send_whatsapp":
             lead_id = args.get("lead_id", "")
@@ -228,18 +290,16 @@ class Stilbon(BaseAgent):
                         lead_name = row.name
                 except Exception:
                     pass
+            # Layer 3 fallback: use phone from user's message if lead has no phone
             if not phone:
-                return {
-                    "status": "no_phone",
-                    "reason": (
-                        f"Lead '{lead_name or lead_id}' has no phone stored. "
-                        "Ask for the number and use send_whatsapp_direct instead."
-                    ),
-                }
+                phone = _ctx_phone(context)
+            if not phone:
+                return {"status": "no_phone",
+                        "reason": "No phone found. Ask the user for the number and use send_whatsapp_direct."}
             try:
                 return await self._do_send(phone, args.get("message", ""), name=lead_name)
-            except Exception as e:
-                return {"status": "failed", "error": str(e)}
+            except Exception as exc:
+                return {"status": "failed", "error": str(exc)}
 
         if tool_name == "run_safe_batch":
             leads = args.get("lead_ids", [])
@@ -275,7 +335,6 @@ class Stilbon(BaseAgent):
     # ── WhatsApp sender ────────────────────────────────────────────────────────
 
     async def _do_send(self, phone: str, message: str, name: str = "") -> dict:
-        """Send a WhatsApp message. Raises on network failure; returns dict otherwise."""
         from app.config import settings
         import httpx
 
@@ -285,7 +344,7 @@ class Stilbon(BaseAgent):
 
         url = settings.wa_bot_url.rstrip("/")
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Check if WhatsApp is connected — but don't block the send on parse errors
+            # Check connection status — but don't block on parse errors
             try:
                 status_resp = await client.get(f"{url}/status", timeout=5.0)
                 try:
@@ -295,17 +354,13 @@ class Stilbon(BaseAgent):
                 if "sessions" in status_data:
                     connected = any(s.get("connected") for s in status_data.get("sessions", []))
                 else:
-                    connected = status_data.get("connected", True)  # optimistic if unparseable
+                    connected = status_data.get("connected", True)
                 if not connected:
-                    return {
-                        "status": "not_sent",
-                        "reason": "WhatsApp not connected — scan QR on Integrations page.",
-                        "to": phone,
-                    }
+                    return {"status": "not_sent", "to": phone,
+                            "reason": "WhatsApp not connected — scan QR on Integrations page."}
             except Exception:
-                pass  # Can't reach status endpoint — try sending anyway
+                pass  # Can't reach status — try sending anyway
 
-            # Send the message
             payload = {"to": phone, "message": message, "session": "default"}
             resp = await client.post(f"{url}/api/send", json=payload)
             try:
@@ -315,12 +370,12 @@ class Stilbon(BaseAgent):
 
             wa_status = data.get("status") or data.get("result") or ""
             error_msg = data.get("error") or data.get("message") or ""
-            actually_sent = wa_status in ("sent", "success", "ok", "queued") or resp.status_code < 300
+            ok = wa_status in ("sent", "success", "ok", "queued") or resp.status_code < 300
 
             return {
-                "status": "sent" if actually_sent else "failed",
+                "status": "sent" if ok else "failed",
                 "to": phone,
                 **({"name": name} if name else {}),
                 "wa_response": wa_status or str(resp.status_code),
-                **({"error": error_msg} if error_msg and not actually_sent else {}),
+                **({"error": error_msg} if error_msg and not ok else {}),
             }
