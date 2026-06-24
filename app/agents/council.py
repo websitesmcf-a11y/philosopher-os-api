@@ -21,6 +21,7 @@ class CouncilOrchestrator:
 
     async def route(self, user_input: str, org_id: str | None = None) -> str:
         """Determine the primary agent using keyword matching + optional LLM routing."""
+        import re
         input_lower = user_input.lower()
 
         # Fast keyword-based routing
@@ -28,16 +29,23 @@ class CouncilOrchestrator:
             return "solon"
         if any(w in input_lower for w in ["analytics", "metrics", "numbers", "stats", "report", "dashboard", "forecast", "performance"]):
             return "pythagoras"
-        if any(w in input_lower for w in ["research", "find", "search", "look up", "investigate", "market", "industry", "competitor", "trend"]):
-            return "heraclitus"
         if any(w in input_lower for w in ["critique", "strategy", "think", "evaluate", "analyze", "should i", "what if", "review", "assess"]):
             return "socrates"
         if any(w in input_lower for w in ["status", "health", "broken", "error", "down", "deploy", "system", "server", "infra"]):
             return "archimedes"
         if any(w in input_lower for w in ["schedule", "calendar", "meeting", "appointment", "book", "remind", "organize", "agenda"]):
             return "athena"
-        if any(w in input_lower for w in ["outreach", "campaign", "send", "contact", "message", "whatsapp", "email", "drip", "follow", "facebook", "instagram", "linkedin", "post on", "social"]):
-            return "odysseus"
+
+        # Stilbon (direct messaging) — checked BEFORE broad "message" / odysseus routing
+        # so "message 0731234567" or "whatsapp John at +27..." goes to the right agent.
+        _has_phone = bool(re.search(r'\b(\+27|0[6-8]\d)[0-9\s\-]{5,}\b', user_input))
+        if _has_phone:
+            return "stilbon"
+        if any(w in input_lower for w in [
+            "send now", "send whatsapp", "whatsapp message", "send a whatsapp",
+            "stilbon", "deliver", "transmit", "broadcast", "dispatch", "batch send",
+        ]):
+            return "stilbon"
 
         # God/Titan routing
         if any(w in input_lower for w in ["lead gen", "collect leads", "bulk", "mass", "iapetus", "master workflow", "orchestrate", "full mission"]):
@@ -46,10 +54,15 @@ class CouncilOrchestrator:
             return "astraeus"
         if any(w in input_lower for w in ["clean", "duplicate", "dedup", "erebos", "integrity", "audit", "quarantine", "broken data", "dirty", "cleanup", "merge"]):
             return "erebos"
-        if any(w in input_lower for w in ["draft", "message", "copy", "write", "creative", "personalize", "outreach message", "phantasos", "sequence", "follow-up"]):
+        if any(w in input_lower for w in ["draft", "copy", "write", "creative", "personalize", "outreach message", "phantasos", "sequence", "follow-up"]):
             return "phantasos"
-        if any(w in input_lower for w in ["send now", "send whatsapp", "send email", "stilbon", "deliver", "transmit", "broadcast", "dispatch", "batch send"]):
-            return "stilbon"
+
+        # Odysseus handles campaign/social/outreach (not direct single sends)
+        if any(w in input_lower for w in ["outreach", "campaign", "contact", "message", "whatsapp", "email", "drip", "follow", "facebook", "instagram", "linkedin", "post on", "social"]):
+            return "odysseus"
+
+        if any(w in input_lower for w in ["research", "find", "search", "look up", "investigate", "market", "industry", "competitor", "trend"]):
+            return "heraclitus"
 
         if any(w in input_lower for w in ["remember", "knowledge", "what do we know", "memory", "find information"]):
             return "aristotle"

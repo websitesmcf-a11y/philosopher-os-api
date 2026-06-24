@@ -127,10 +127,14 @@ class BaseAgent(ABC):
         "you MUST call the appropriate tool. Do NOT say 'I will do that' or 'Let me start by...' "
         "and then just describe what you would do. Actually call the tool.\n"
         "2. If the request belongs to a different specialist, call redirect_to_agent with the right "
-        "agent and the task — do not apologize or refuse. The council covers research/leads "
-        "(heraclitus), outreach/campaigns/social posting (odysseus), analytics (pythagoras), "
-        "finance (solon), calendar/tasks (athena), knowledge (aristotle), strategy (socrates), "
-        "operations (leonidas), engineering (archimedes), coordination (plato).\n"
+        "agent and the task — do not apologize or refuse. Specialist ownership: "
+        "research/lead generation (heraclitus), "
+        "campaign/bulk outreach/social media posting (odysseus), "
+        "DIRECT WhatsApp messages to a phone number or named contact (stilbon — NEVER odysseus), "
+        "analytics/dashboards (pythagoras), "
+        "finance/invoices (solon), calendar/tasks (athena), knowledge base (aristotle), "
+        "strategy/decisions (socrates), operations/monitoring (leonidas), engineering (archimedes), "
+        "coordination/planning (plato).\n"
         "3. Only say 'I cannot do this because [specific reason]' after a tool actually failed or "
         "returned not_connected — and then state exactly what the user must configure. "
         "Never invent results and never pretend to execute actions.\n"
@@ -156,8 +160,9 @@ class BaseAgent(ABC):
         {
             "name": "redirect_to_agent",
             "description": (
-                "Hand the request to the specialist agent who owns this domain and return their "
-                "answer. Use this whenever the user asked YOU for something outside your role."
+                "Hand the ENTIRE request to a specialist agent and return their answer as yours. "
+                "Use when the user asked YOU for something fully outside your role. "
+                "The user will see a handover notification in the UI."
             ),
             "input_schema": {
                 "type": "object",
@@ -172,6 +177,31 @@ class BaseAgent(ABC):
                     "task": {"type": "string", "description": "The task, restated clearly"},
                 },
                 "required": ["agent", "task"],
+            },
+        },
+        {
+            "name": "get_help_from",
+            "description": (
+                "Ask a specialist agent for help with ONE subtask, then continue your own work. "
+                "Unlike redirect_to_agent (which hands off everything), this lets you stay in control "
+                "and incorporate the result yourself. "
+                "Example: Stilbon calls get_help_from phantasos to draft a message, then sends it. "
+                "Agents: plato, socrates, aristotle, athena, heraclitus, pythagoras, solon, "
+                "leonidas, archimedes, odysseus, iapetus, astraeus, erebos, phantasos, stilbon."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "enum": ["plato", "socrates", "aristotle", "athena", "heraclitus",
+                                 "pythagoras", "solon", "leonidas", "archimedes", "odysseus",
+                                 "iapetus", "astraeus", "erebos", "phantasos", "stilbon"],
+                        "description": "The specialist to consult",
+                    },
+                    "subtask": {"type": "string", "description": "The specific subtask to hand to them"},
+                },
+                "required": ["agent", "subtask"],
             },
         },
         {
@@ -428,16 +458,16 @@ class BaseAgent(ABC):
         return result
 
     async def _execute_common_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
-        if tool_name == "redirect_to_agent":
+        if tool_name in ("redirect_to_agent", "get_help_from"):
             agent_name = args.get("agent", "")
-            task = args.get("task", "")
+            task = args.get("task") or args.get("subtask", "")
             if not self.council or agent_name not in getattr(self.council, "agents", {}):
                 return {"status": "error", "message": f"Agent '{agent_name}' is not registered"}
             if agent_name == self.name:
-                return {"status": "error", "message": "Cannot redirect to yourself — handle the task with your own tools."}
+                return {"status": "error", "message": "Cannot delegate to yourself — handle it with your own tools."}
             depth = getattr(context, "depth", 0) if context else 0
             if depth >= MAX_REDIRECT_DEPTH:
-                return {"status": "error", "message": "Redirect limit reached — answer with your own tools."}
+                return {"status": "error", "message": "Delegation limit reached — answer with your own tools."}
             target = self.council.agents[agent_name]
             sub_context = AgentContext(
                 user_input=task,
@@ -446,8 +476,9 @@ class BaseAgent(ABC):
                 depth=depth + 1,
             )
             result = await target.run(sub_context)
+            action = "redirected" if tool_name == "redirect_to_agent" else "helped"
             return {
-                "status": "redirected",
+                "status": action,
                 "agent": agent_name,
                 "response": (result.message or "")[:2000],
                 "success": result.success,
