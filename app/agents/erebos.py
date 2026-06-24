@@ -1,4 +1,4 @@
-﻿"""Erebos â€” Cleanup, Risk & Failure Recovery (God/Titan)"""
+"""Erebos — Cleanup, Risk & Failure Recovery (God/Titan)"""
 import logging
 from typing import Any
 from datetime import datetime, timezone
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class Erebos(BaseAgent):
-    LLM_MODEL = "deepseek-reasoner"
+    LLM_MODEL = "deepseek-v4-pro"
     LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
@@ -47,7 +47,7 @@ class Erebos(BaseAgent):
             },
             {
                 "name": "audit_crm",
-                "description": "Run full CRM health audit â€” checks lead list integrity, orphaned leads, data quality",
+                "description": "Run full CRM health audit — checks lead list integrity, orphaned leads, data quality",
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -242,7 +242,7 @@ class Erebos(BaseAgent):
                         )
                         to_remove = [str(r.id) for r in result.scalars().all()]
                     if not to_remove:
-                        # DB leads missing, can't determine phone â€” return status
+                        # DB leads missing, can't determine phone — return status
                         return {
                             "status": "no_data",
                             "message": (

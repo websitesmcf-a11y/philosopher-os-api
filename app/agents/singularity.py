@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class Singularity(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
-    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash", "claude-sonnet-4-6"]
+    LLM_MODEL_FALLBACKS = ["deepseek-v4-flash", "deepseek-v4-flash"]
 
     def __init__(self):
         super().__init__(

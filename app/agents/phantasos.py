@@ -1,10 +1,10 @@
-﻿"""Phantasos â€” Creative Outreach & Personalization (God/Titan)"""
+"""Phantasos — Creative Outreach & Personalization (God/Titan)"""
 from typing import Any
 from app.agents.base import BaseAgent, AgentContext, AgentActionResult
 
 
 class Phantasos(BaseAgent):
-    LLM_MODEL = "deepseek-reasoner"
+    LLM_MODEL = "deepseek-v4-pro"
     LLM_MODEL_FALLBACKS = ["deepseek-v4-pro", "deepseek-v4-flash"]
     def __init__(self):
         super().__init__(
