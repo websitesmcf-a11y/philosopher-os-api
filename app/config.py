@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     dev_admin_email: str = "admin@socrates.ai"
     dev_admin_password: str = "admin123"
 
+    # Meta (Facebook / Instagram)
+    facebook_app_id: Optional[str] = None
+    facebook_app_secret: Optional[str] = None
+    facebook_verify_token: str = "philosopher_os_meta_2026"
+
     # WhatsApp
     whatsapp_session_path: str = "./.wwebjs_auth"
     wa_bot_url: str = ""

@@ -196,3 +196,87 @@ async def whatsapp_business_webhook(request: Request, db: AsyncSession = Depends
 
     # Meta expects a 200 OK to acknowledge receipt
     return {"received": True}
+
+
+# ── Facebook Messenger + Instagram DM webhook ──────────────────────────────────
+
+@router.get("/facebook")
+async def facebook_webhook_verify(request: Request):
+    """Meta webhook verification handshake (GET)."""
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+    if mode == "subscribe" and token == settings.facebook_verify_token:
+        logger.info("Facebook/Instagram webhook verified by Meta")
+        return int(challenge) if challenge and challenge.isdigit() else challenge
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@router.post("/facebook")
+async def facebook_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive incoming Messenger and Instagram DMs from Meta and reply via Stilbon."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"received": True}
+
+    obj = payload.get("object", "")  # "page" for Messenger, "instagram" for IG DMs
+
+    try:
+        for entry in payload.get("entry", []):
+            for event in entry.get("messaging", []):
+                sender_id = event.get("sender", {}).get("id", "")
+                msg = event.get("message", {})
+                text = msg.get("text", "")
+
+                # Skip echoes (messages sent BY the page/account)
+                if msg.get("is_echo"):
+                    continue
+                if not sender_id or not text:
+                    continue
+
+                logger.info("Meta %s DM from %s: %s", obj, sender_id, text[:100])
+
+                # Route through Stilbon — it knows the channel and sender_id
+                try:
+                    from app.agents.council import CouncilOrchestrator
+                    from app.main import council as app_council  # reuse registered instance
+
+                    reply_text = ""
+                    async for chunk in app_council.process_stream(
+                        user_input=text,
+                        org_id=None,
+                        db_session=db,
+                        agent="stilbon",
+                    ):
+                        import json as _json
+                        try:
+                            d = _json.loads(chunk.removeprefix("data: ").strip())
+                            if d.get("type") == "token":
+                                reply_text += d.get("content", "")
+                        except Exception:
+                            pass
+
+                    if reply_text:
+                        from app.integrations.facebook import send_messenger_message, send_instagram_reply
+                        if obj == "instagram":
+                            await send_instagram_reply(db, sender_id, reply_text.strip())
+                        else:
+                            await send_messenger_message(db, sender_id, reply_text.strip())
+                except Exception as e:
+                    logger.error("Failed to process Meta message: %s", e)
+    except Exception as e:
+        logger.error("Error parsing Meta webhook: %s", e)
+
+    return {"received": True}
+
+
+@router.post("/facebook/make-permanent-token")
+async def facebook_make_permanent_token(db: AsyncSession = Depends(get_db)):
+    """Exchange the stored Facebook token for a never-expiring Page Access Token.
+
+    Call this once from the Connections page after connecting Facebook.
+    Requires FACEBOOK_APP_ID and FACEBOOK_APP_SECRET in Railway environment variables.
+    """
+    from app.integrations.facebook import exchange_to_permanent_token
+    return await exchange_to_permanent_token(db)
