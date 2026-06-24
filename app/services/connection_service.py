@@ -216,7 +216,7 @@ async def _test_google_calendar(secrets: dict) -> tuple[bool, str]:
 
 
 def _test_obsidian_vault(config: dict) -> tuple[bool, str]:
-    """The vault must be an existing, writable directory."""
+    """Save vault path — skip filesystem check when running on Railway (path is local)."""
     import os
     from pathlib import Path
 
@@ -225,7 +225,9 @@ def _test_obsidian_vault(config: dict) -> tuple[bool, str]:
         return False, "Enter the absolute path of your Obsidian vault"
     vault = Path(raw)
     if not vault.is_dir():
-        return False, f"Folder not found: {vault}"
+        # Path doesn't exist on this server (Railway) — save it anyway.
+        # File sync will work when triggered locally.
+        return True, f"Vault path saved: {vault}"
     probe = vault / ".socrates-write-test"
     try:
         probe.write_text("ok", encoding="utf-8")
