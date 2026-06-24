@@ -45,7 +45,7 @@ async def exchange_to_permanent_token(db) -> dict:
     Returns the updated token info or an error dict.
     """
     from app.config import settings
-    from app.services.connection_service import get_provider_credentials, save_provider_credentials
+    from app.services.connection_service import get_provider_credentials, ConnectionService
 
     if not settings.facebook_app_id or not settings.facebook_app_secret:
         return {
@@ -109,8 +109,9 @@ async def exchange_to_permanent_token(db) -> dict:
             return {"status": "error", "message": "No Page token found. Make sure the connected account manages a Facebook Page."}
 
     # Save the permanent token back to DB
-    await save_provider_credentials(
-        db, "facebook",
+    svc = ConnectionService(db)
+    await svc.save_connection(
+        "facebook",
         secrets={"page_access_token": page_token},
         config={"page_id": found_page_id, "permanent": True},
     )
