@@ -94,6 +94,59 @@ class Stilbon(BaseAgent):
             },
         ]
 
+    # ── Code-level guardrails ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_phone(text: str) -> str | None:
+        """Return the first SA-format phone number found in text, or None."""
+        import re
+        m = re.search(r'\b(\+27[0-9\s\-]{8,12}|27[0-9\s\-]{8,12}|0[6-8][0-9\s\-]{7,11})\b', text)
+        if m:
+            return re.sub(r'[\s\-]', '', m.group(0))
+        return None
+
+    async def _dispatch_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
+        """
+        Code-level override: if the LLM tries to redirect a direct-send request
+        to Odysseus (ignoring our instructions), block it and return a strong
+        correction so the next round uses send_whatsapp_direct instead.
+        """
+        if tool_name in ("redirect_to_agent", "get_help_from") and args.get("agent") in (
+            "odysseus", "heraclitus", "aristotle"
+        ):
+            user_text = getattr(context, "user_input", "") if context else ""
+            phone = self._extract_phone(user_text)
+            if phone:
+                return {
+                    "status": "blocked_by_stilbon",
+                    "correction": (
+                        f"WRONG TOOL. You attempted to redirect a direct-send to another agent, "
+                        f"but that is forbidden. "
+                        f"Phone number detected: {phone}. "
+                        f"Call send_whatsapp_direct NOW with phone='{phone}' and the message text. "
+                        f"No CRM entry is required. No redirect. Just call send_whatsapp_direct."
+                    ),
+                }
+        return await super()._dispatch_tool(tool_name, args, context)
+
+    async def _build_messages(self, context: AgentContext) -> tuple[list[dict], str]:
+        """Inject a code-level directive when a phone number is in the input."""
+        messages, context_str = await super()._build_messages(context)
+        phone = self._extract_phone(context.user_input)
+        if phone and messages:
+            # Prepend an undeniable directive to the user turn
+            last = messages[-1]
+            messages[-1] = {
+                **last,
+                "content": (
+                    f"[SYSTEM DIRECTIVE — PHONE NUMBER DETECTED: {phone}]\n"
+                    f"You MUST call send_whatsapp_direct with phone='{phone}'.\n"
+                    f"DO NOT call redirect_to_agent for any reason related to this number.\n"
+                    f"DO NOT say you need a CRM entry. send_whatsapp_direct works without CRM.\n\n"
+                ) + last.get("content", ""),
+            }
+        return messages, context_str
+
     async def _execute_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
         if tool_name == "send_whatsapp":
             # Look up the phone number from the CRM — never send UUID as "to"
