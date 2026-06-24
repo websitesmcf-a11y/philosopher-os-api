@@ -10,7 +10,10 @@ _PHONE_RE = re.compile(
 _SEND_WORDS = frozenset([
     'send', 'message', 'msg', 'whatsapp', 'wa', 'text',
     'tell', 'say', 'drop', 'ping', 'reach', 'notify', 'hit',
+    'write', 'chat', 'contact', 'forward',
 ])
+# Words that mean the user wants a lookup, NOT a send
+_LOOKUP_ONLY = frozenset(['find', 'search', 'look up', 'lookup', 'exists', 'does', 'who is'])
 
 
 def _extract_phone(text: str) -> str | None:
@@ -42,6 +45,9 @@ def _phone_in_history(context) -> str | None:
 class Stilbon(BaseAgent):
     LLM_MODEL = "deepseek-v4-pro"
     LLM_MODEL_FALLBACKS = ["deepseek-v4-flash"]
+
+    # Don't let the LLM do a connection check before every send — _do_send handles that
+    EXCLUDED_COMMON_TOOLS = {"check_integration"}
 
     def __init__(self):
         super().__init__(
@@ -114,16 +120,20 @@ class Stilbon(BaseAgent):
         self, context: AgentContext, on_stop: callable = None
     ) -> AsyncGenerator[str | ToolEvent, None]:
         user_text = context.user_input
+        lower = user_text.lower()
         phone = _extract_phone(user_text)
-        has_send = any(k in user_text.lower() for k in _SEND_WORDS)
 
-        # If the user's current message has a phone and send intent — bypass LLM entirely
-        if phone and has_send:
+        # Stilbon is a messaging agent. If the current message contains a phone number
+        # and doesn't look like a pure lookup query, treat it as a send request.
+        is_lookup_only = any(k in lower for k in _LOOKUP_ONLY)
+        if phone and not is_lookup_only:
             async for chunk in self._stream_send(phone, context):
                 yield chunk
             return
 
-        # Follow-up message ("try again", "do it") — search conversation history for phone
+        # Follow-up message ("do it", "try again", "go ahead") after a conversation
+        # that already had a phone number — search history.
+        has_send = any(k in lower for k in _SEND_WORDS)
         if has_send and not phone:
             phone = _phone_in_history(context)
             if phone:
