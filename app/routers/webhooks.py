@@ -280,3 +280,25 @@ async def facebook_make_permanent_token(db: AsyncSession = Depends(get_db)):
     """
     from app.integrations.facebook import exchange_to_permanent_token
     return await exchange_to_permanent_token(db)
+
+
+@router.post("/facebook/set-page-token")
+async def facebook_set_page_token(
+    page_access_token: str,
+    page_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Directly save a Page Access Token to the database (no auth required).
+
+    Use this to bootstrap the connection when you already have a permanent token
+    from the Graph API Explorer.
+    """
+    from app.services.connection_service import ConnectionService
+    svc = ConnectionService(db)
+    result = await svc.save_connection(
+        "facebook",
+        secrets={"page_access_token": page_access_token},
+        config={"page_id": page_id, "page_name": "Philosopher OS", "permanent": "true"},
+    )
+    await db.commit()
+    return result

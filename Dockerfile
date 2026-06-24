@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Build timestamp forces cache invalidation: 2026-06-24T17:00
+# Build timestamp forces cache invalidation: 2026-06-24T18:00
 ARG BUILD_TIMESTAMP=2026-06-24T17:00
 
 # Install Chromium + dependencies for cloud browser automation
