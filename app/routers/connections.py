@@ -459,6 +459,96 @@ class ConnectionPayload(BaseModel):
     config: dict[str, str] = {}
 
 
+@router.get("/facebook/oauth")
+async def facebook_oauth_start(request: Request):
+    """Redirect user to Meta OAuth. After they approve, Meta sends them back to /callback
+    which saves the permanent Page token automatically."""
+    if not settings.facebook_app_id:
+        raise HTTPException(status_code=400, detail="FACEBOOK_APP_ID not set in Railway environment variables.")
+    callback_url = "https://web-production-a93f0.up.railway.app/api/v1/connections/facebook/callback"
+    scope = "pages_messaging,pages_read_engagement,pages_manage_metadata,pages_show_list,pages_manage_posts"
+    auth_url = (
+        f"https://www.facebook.com/v21.0/dialog/oauth"
+        f"?client_id={settings.facebook_app_id}"
+        f"&redirect_uri={callback_url}"
+        f"&scope={scope}"
+        f"&response_type=code"
+    )
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/facebook/callback")
+async def facebook_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Meta sends the user here after they approve. Exchanges code → user token → permanent Page token → saves to DB."""
+    if error:
+        raise HTTPException(status_code=400, detail=f"Facebook auth error: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code from Facebook.")
+
+    callback_url = "https://web-production-a93f0.up.railway.app/api/v1/connections/facebook/callback"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Step 1: exchange code for short-lived user token
+        r1 = await client.get(
+            "https://graph.facebook.com/v21.0/oauth/access_token",
+            params={
+                "client_id": settings.facebook_app_id,
+                "client_secret": settings.facebook_app_secret,
+                "redirect_uri": callback_url,
+                "code": code,
+            },
+        )
+        d1 = r1.json()
+        if "error" in d1:
+            raise HTTPException(status_code=400, detail=f"Token exchange failed: {d1['error'].get('message')}")
+        user_token = d1.get("access_token", "")
+
+        # Step 2: exchange for long-lived user token (60 days)
+        r2 = await client.get(
+            "https://graph.facebook.com/v21.0/oauth/access_token",
+            params={
+                "grant_type": "fb_exchange_token",
+                "client_id": settings.facebook_app_id,
+                "client_secret": settings.facebook_app_secret,
+                "fb_exchange_token": user_token,
+            },
+        )
+        d2 = r2.json()
+        long_token = d2.get("access_token", user_token)
+
+        # Step 3: get permanent Page Access Token
+        r3 = await client.get(
+            "https://graph.facebook.com/v21.0/me/accounts",
+            params={"access_token": long_token},
+        )
+        d3 = r3.json()
+        pages = d3.get("data", [])
+        if not pages:
+            raise HTTPException(status_code=400, detail="No Facebook Pages found on this account. Create a Page first.")
+
+        page = pages[0]
+        page_token = page.get("access_token", "")
+        page_id = page.get("id", "")
+        page_name = page.get("name", "")
+
+    # Save to DB
+    svc = ConnectionService(db)
+    await svc.save_connection(
+        "facebook",
+        secrets={"page_access_token": page_token},
+        config={"page_id": page_id, "page_name": page_name, "permanent": True},
+    )
+    await db.commit()
+
+    logger.info("Facebook connected via OAuth: page %s (%s)", page_name, page_id)
+    return RedirectResponse(url="https://philosopher-os.vercel.app/connections?facebook=connected")
+
+
 @router.get("")
 async def list_connections(
     db: AsyncSession = Depends(get_db),
