@@ -6,7 +6,8 @@ from app.database.session import get_db
 from app.core.security import get_current_user, get_current_org
 from app.schemas.knowledge import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from app.services.knowledge_service import KnowledgeService
-from app.database.models import KnowledgeBase
+from app.database.models import KnowledgeBase, Lead, Client, Campaign, Conversation, Message, Integration
+import uuid as _uuid
 
 router = APIRouter()
 
@@ -183,4 +184,165 @@ async def upload_knowledge_file(
         "file_type": ext,
         "filename": file.filename,
         "message": f"File '{file.filename}' added to knowledge base. All agents can now access this information.",
+    }
+
+
+@router.post("/sync-everything")
+async def sync_everything_to_graph(
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    """Pull leads, clients, campaigns, and conversations into the knowledge graph
+    so they appear as nodes. Also triggers Obsidian sync if vault is configured."""
+    service = KnowledgeService(db, org_id=org_id)
+    org_uuid = _uuid.UUID(org_id) if isinstance(org_id, str) else org_id
+    added = 0
+
+    # ── Leads → knowledge nodes ──────────────────────────────────────
+    leads = (await db.execute(select(Lead).where(Lead.org_id == org_uuid))).scalars().all()
+    for lead in leads:
+        cf = lead.custom_fields or {}
+        title = f"Lead: {lead.company or lead.name}"
+        existing = (await db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.org_id == org_uuid,
+                KnowledgeBase.title == title,
+            )
+        )).scalar_one_or_none()
+        if not existing:
+            content = (
+                f"Contact: {lead.name}\n"
+                f"Industry: {lead.industry or '—'}\n"
+                f"City: {cf.get('city', '—')}\n"
+                f"Phone: {lead.phone or '—'}\n"
+                f"Email: {lead.email or '—'}\n"
+                f"Status: {lead.status or 'new'}\n"
+                f"Priority: {cf.get('priority', '—')}\n\n"
+                f"{lead.notes or ''}"
+            ).strip()
+            await service.add_entry(KnowledgeBaseCreate(
+                title=title,
+                content=content,
+                category="leads",
+                tags=["lead"] + (lead.tags or []) + ([lead.industry] if lead.industry else []),
+            ))
+            added += 1
+
+    # ── Clients → knowledge nodes ─────────────────────────────────────
+    clients = (await db.execute(select(Client).where(Client.org_id == org_uuid))).scalars().all()
+    for client in clients:
+        title = f"Client: {client.company or client.name}"
+        existing = (await db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.org_id == org_uuid,
+                KnowledgeBase.title == title,
+            )
+        )).scalar_one_or_none()
+        if not existing:
+            content = (
+                f"Contact: {client.name}\n"
+                f"Phone: {client.phone or '—'}\n"
+                f"Email: {client.email or '—'}\n\n"
+                f"{getattr(client, 'notes', '') or ''}"
+            ).strip()
+            await service.add_entry(KnowledgeBaseCreate(
+                title=title,
+                content=content,
+                category="clients",
+                tags=["client"],
+            ))
+            added += 1
+
+    # ── Campaigns → knowledge nodes ───────────────────────────────────
+    camps = (await db.execute(select(Campaign).where(Campaign.org_id == org_uuid))).scalars().all()
+    for camp in camps:
+        title = f"Campaign: {camp.name}"
+        existing = (await db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.org_id == org_uuid,
+                KnowledgeBase.title == title,
+            )
+        )).scalar_one_or_none()
+        if not existing:
+            content = (
+                f"Channel: {camp.channel or '—'}\n"
+                f"Status: {camp.status or 'draft'}\n"
+                f"Industry: {camp.industry or '—'}\n"
+                f"Sent: {camp.sent_count or 0} | Replies: {camp.reply_count or 0}\n\n"
+                f"Message Template:\n{camp.message_template or '—'}"
+            ).strip()
+            await service.add_entry(KnowledgeBaseCreate(
+                title=title,
+                content=content,
+                category="campaigns",
+                tags=["campaign", camp.channel or "outreach"],
+            ))
+            added += 1
+
+    # ── Recent conversations → knowledge nodes ────────────────────────
+    convs = (await db.execute(
+        select(Conversation)
+        .where(Conversation.org_id == org_uuid)
+        .order_by(Conversation.last_message_at.desc().nullslast())
+        .limit(50)
+    )).scalars().all()
+    for conv in convs:
+        agent = (conv.extra_metadata or {}).get("agent", "unknown")
+        when = conv.last_message_at or conv.created_at
+        date_str = when.strftime("%Y-%m-%d") if when else "unknown"
+        title = f"Chat: {agent} ({date_str})"
+        existing = (await db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.org_id == org_uuid,
+                KnowledgeBase.title == title,
+            )
+        )).scalar_one_or_none()
+        if not existing:
+            msgs = (await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv.id)
+                .order_by(Message.created_at)
+                .limit(20)
+            )).scalars().all()
+            content_parts = [f"Agent: {agent}", f"Date: {date_str}", ""]
+            for msg in msgs:
+                role = "User" if msg.sender_type == "user" else agent.title()
+                content_parts.append(f"{role}: {(msg.body or '')[:300]}")
+            await service.add_entry(KnowledgeBaseCreate(
+                title=title,
+                content="\n".join(content_parts),
+                category="conversations",
+                tags=["conversation", agent],
+            ))
+            added += 1
+
+    # ── Also trigger Obsidian vault sync if configured ────────────────
+    obsidian_written = 0
+    obsidian_status = "not_configured"
+    try:
+        result = await db.execute(
+            select(Integration).where(
+                Integration.provider == "obsidian",
+                Integration.org_id == org_uuid,
+            )
+        )
+        obs_row = result.scalar_one_or_none()
+        vault_path = (obs_row.config or {}).get("vault_path", "").strip() if obs_row else ""
+        if vault_path:
+            from app.services.obsidian_sync import sync_vault
+            sync_result = await sync_vault(db, vault_path)
+            obsidian_written = sync_result.get("written", 0)
+            obsidian_status = "synced"
+    except Exception as e:
+        obsidian_status = f"error: {e}"
+
+    return {
+        "added_to_graph": added,
+        "leads": len(leads),
+        "clients": len(clients),
+        "campaigns": len(camps),
+        "conversations": len(convs),
+        "obsidian": {"status": obsidian_status, "files_written": obsidian_written},
+        "message": f"Added {added} new nodes to memory graph. {obsidian_written} files written to Obsidian vault." if obsidian_written else f"Added {added} new nodes to memory graph.",
     }
