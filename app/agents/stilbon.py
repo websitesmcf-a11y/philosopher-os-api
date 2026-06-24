@@ -1,6 +1,7 @@
 """Stilbon — Speed Messenger & Communication Operator (God/Titan)"""
-from typing import Any
-from app.agents.base import BaseAgent, AgentContext, AgentActionResult
+import re
+from typing import Any, AsyncGenerator
+from app.agents.base import BaseAgent, AgentContext, AgentActionResult, ToolEvent
 
 
 class Stilbon(BaseAgent):
@@ -107,27 +108,38 @@ class Stilbon(BaseAgent):
 
     async def _dispatch_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
         """
-        Code-level override: if the LLM tries to redirect a direct-send request
-        to Odysseus (ignoring our instructions), block it and return a strong
-        correction so the next round uses send_whatsapp_direct instead.
+        Code-level guardrails:
+        - Block any redirect attempt when a phone number is in the user's message.
+        - Augment find_lead_by_name "not found" results to force send_whatsapp_direct.
         """
-        if tool_name in ("redirect_to_agent", "get_help_from") and args.get("agent") in (
-            "odysseus", "heraclitus", "aristotle"
-        ):
-            user_text = getattr(context, "user_input", "") if context else ""
-            phone = self._extract_phone(user_text)
-            if phone:
+        user_text = getattr(context, "user_input", "") if context else ""
+        phone = self._extract_phone(user_text)
+
+        # Block ALL redirects when user gave a phone number (except phantasos for drafting)
+        if tool_name in ("redirect_to_agent", "get_help_from") and phone:
+            target = args.get("agent", "")
+            if target != "phantasos":
                 return {
-                    "status": "blocked_by_stilbon",
+                    "status": "blocked",
                     "correction": (
-                        f"WRONG TOOL. You attempted to redirect a direct-send to another agent, "
-                        f"but that is forbidden. "
-                        f"Phone number detected: {phone}. "
-                        f"Call send_whatsapp_direct NOW with phone='{phone}' and the message text. "
-                        f"No CRM entry is required. No redirect. Just call send_whatsapp_direct."
+                        f"REDIRECT BLOCKED. Phone number '{phone}' is in the user's message. "
+                        f"You do NOT need to redirect anywhere. "
+                        f"Call send_whatsapp_direct with phone='{phone}' and the message text right now. "
+                        f"This tool sends to any number without a CRM record."
                     ),
                 }
-        return await super()._dispatch_tool(tool_name, args, context)
+
+        result = await super()._dispatch_tool(tool_name, args, context)
+
+        # Augment find_lead_by_name "not found" when phone is available
+        if tool_name == "find_lead_by_name" and isinstance(result, dict) and result.get("status") == "not_found" and phone:
+            result["IMMEDIATE_NEXT_STEP"] = (
+                f"Lead not in CRM — but the phone number '{phone}' is available from the user's message. "
+                f"Call send_whatsapp_direct with phone='{phone}' right now. "
+                f"send_whatsapp_direct does NOT require a CRM record — it sends to any WhatsApp number directly."
+            )
+
+        return result
 
     async def _build_messages(self, context: AgentContext) -> tuple[list[dict], str]:
         """Inject a code-level directive when a phone number is in the input."""
@@ -146,6 +158,73 @@ class Stilbon(BaseAgent):
                 ) + last.get("content", ""),
             }
         return messages, context_str
+
+    # ── Fast-path: bypass LLM tool orchestration entirely ──────────────────────
+
+    _SEND_KEYWORDS = frozenset([
+        'send', 'message', 'msg', 'whatsapp', 'wa', 'text', 'tell', 'say',
+        'drop', 'ping', 'contact', 'reach', 'chat', 'notify',
+    ])
+
+    async def think_stream(
+        self, context: AgentContext, on_stop: callable = None
+    ) -> AsyncGenerator[str | ToolEvent, None]:
+        """
+        Fast path: if the user's message contains a phone number + send intent,
+        skip LLM tool orchestration entirely.
+          1. Ask LLM to compose only the message text (no tools).
+          2. Call _do_send() directly.
+        This guarantees delivery without the LLM second-guessing CRM requirements.
+        """
+        user_text = context.user_input
+        phone = self._extract_phone(user_text)
+        has_send = any(k in user_text.lower() for k in self._SEND_KEYWORDS)
+
+        if phone and has_send:
+            normalized = self._normalize_phone(phone)
+            yield f"Sending WhatsApp to {normalized}...\n\n"
+
+            # 1. Compose message text with a lightweight LLM call (no tools)
+            try:
+                compose_resp = await self._llm_generate(
+                    system=(
+                        "You are Stilbon, the AI communication agent for Philosopher OS. "
+                        "Compose a natural WhatsApp message. "
+                        "Output ONLY the message text — no preamble, no quotes, no explanation."
+                    ),
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"Write a WhatsApp message based on this instruction:\n{user_text}\n\n"
+                            "Include who you are (Stilbon, AI communication agent) and what you do if asked. "
+                            "Keep it brief, friendly, and natural."
+                        ),
+                    }],
+                    tools=None,
+                    temperature=0.7,
+                )
+                message_text = (compose_resp.content or "").strip()
+            except Exception:
+                message_text = (
+                    "Hi! I'm Stilbon, the AI communication agent for Philosopher OS. "
+                    "I handle messaging, outreach, and contact management. This is a test message!"
+                )
+
+            # 2. Send directly — no LLM tool loop needed
+            yield ToolEvent("tool_start", "send_whatsapp_direct", input={"phone": normalized, "message": message_text[:80] + "..."})
+            result = await self._do_send(normalized, message_text)
+            yield ToolEvent("tool_end", "send_whatsapp_direct", result=result, duration_ms=0)
+
+            if result.get("status") == "sent":
+                yield f"Message sent to **{normalized}**.\n\n> {message_text}"
+            else:
+                reason = result.get("reason") or result.get("error") or result.get("wa_response") or str(result)
+                yield f"Send attempted to {normalized} — {reason}\n\nMessage I tried to send:\n> {message_text}"
+            return
+
+        # Normal LLM path for non-direct-send requests
+        async for item in super().think_stream(context, on_stop):
+            yield item
 
     async def _execute_tool(self, tool_name: str, args: dict, context: AgentContext = None) -> Any:
         if tool_name == "send_whatsapp":
