@@ -1,12 +1,63 @@
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
 from app.database.session import get_db
 from app.core.security import get_current_user, get_current_org
 from app.schemas.knowledge import KnowledgeBaseCreate, KnowledgeBaseUpdate
 from app.services.knowledge_service import KnowledgeService
+from app.database.models import KnowledgeBase
 
 router = APIRouter()
+
+
+@router.get("/graph")
+async def get_knowledge_graph(
+    db: AsyncSession = Depends(get_db),
+    org_id: str = Depends(get_current_org),
+    user: dict = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.org_id == org_id)
+    )
+    entries = result.scalars().all()
+
+    nodes = [
+        {
+            "id": str(e.id),
+            "title": e.title,
+            "content": e.content,
+            "category": e.category or "general",
+            "tags": e.tags or [],
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in entries
+    ]
+
+    edges = []
+    if len(entries) > 1 and any(e.embedding is not None for e in entries):
+        sql = text("""
+            SELECT
+                a.id::text AS source,
+                b.id::text AS target,
+                1 - (a.embedding <=> b.embedding) AS similarity
+            FROM knowledge_base a
+            JOIN knowledge_base b ON a.id < b.id
+            WHERE a.org_id = :org_id
+              AND b.org_id = :org_id
+              AND a.embedding IS NOT NULL
+              AND b.embedding IS NOT NULL
+              AND 1 - (a.embedding <=> b.embedding) > 0.65
+            ORDER BY similarity DESC
+            LIMIT 60
+        """)
+        rows = (await db.execute(sql, {"org_id": org_id})).fetchall()
+        edges = [
+            {"source": r[0], "target": r[1], "similarity": round(float(r[2]), 3)}
+            for r in rows
+        ]
+
+    return {"nodes": nodes, "edges": edges}
 
 
 @router.get("")
