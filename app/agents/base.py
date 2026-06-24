@@ -317,6 +317,36 @@ class BaseAgent(ABC):
             },
         },
         {
+            "name": "find_lead_by_name",
+            "description": (
+                "Look up a lead/contact by their name, company, or phone number. "
+                "Use this whenever the user refers to someone by name (e.g. 'send to Matthew Charsley') "
+                "to get their lead_id and phone before sending a message."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name, company name, or phone number to search for"},
+                },
+                "required": ["name"],
+            },
+        },
+        {
+            "name": "send_whatsapp_direct",
+            "description": (
+                "Send a WhatsApp message to a phone number directly — no lead_id needed. "
+                "Use when you have the number but the person is not in the CRM."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "phone": {"type": "string", "description": "Phone number with country code, e.g. +27821234567"},
+                    "message": {"type": "string", "description": "Message text to send"},
+                },
+                "required": ["phone", "message"],
+            },
+        },
+        {
             "name": "search_knowledge",
             "description": (
                 "Search the organisation's knowledge base — articles, uploaded files, leads, clients, "
@@ -810,6 +840,56 @@ class BaseAgent(ABC):
                     + (f" Locked for campaign '{campaign_name}'." if should_reserve else "")
                 ),
             }
+
+        if tool_name == "find_lead_by_name":
+            if not context or not context.db_session or not context.org_id:
+                return {"status": "error", "message": "No database session"}
+            from app.database.models import Lead
+            from sqlalchemy import select, or_
+            import uuid as _uuid
+            term = (args.get("name") or "").lower().strip()
+            org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+            rows = (await context.db_session.execute(
+                select(Lead).where(Lead.org_id == org_uuid)
+            )).scalars().all()
+            matches = [
+                r for r in rows
+                if term in (r.name or "").lower()
+                or term in (r.company or "").lower()
+                or term in (r.phone or "").lower()
+                or term in (r.email or "").lower()
+            ]
+            if not matches:
+                return {
+                    "status": "not_found",
+                    "message": f"No lead found matching '{args.get('name')}'. Ask the user for their phone number and use send_whatsapp_direct.",
+                }
+            return {
+                "status": "found",
+                "count": len(matches),
+                "leads": [
+                    {
+                        "id": str(r.id),
+                        "name": r.name,
+                        "company": r.company or "",
+                        "phone": r.phone or "",
+                        "email": r.email or "",
+                        "status": r.status,
+                    }
+                    for r in matches[:5]
+                ],
+            }
+
+        if tool_name == "send_whatsapp_direct":
+            phone = (args.get("phone") or "").strip()
+            message = args.get("message") or ""
+            if not phone:
+                return {"status": "error", "message": "phone is required"}
+            if not message:
+                return {"status": "error", "message": "message is required"}
+            from app.integrations.whatsapp import whatsapp
+            result = await whatsapp.send_message(phone, message)
+            return result
 
         if tool_name == "search_knowledge":
             if not context or not context.db_session or not context.org_id:
