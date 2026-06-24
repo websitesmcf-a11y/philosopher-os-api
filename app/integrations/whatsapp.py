@@ -35,13 +35,21 @@ class WhatsAppClient:
                     f"{self.base_url}/api/send",
                     json=payload,
                 )
-                resp.raise_for_status()
-                data = resp.json()
-                logger.info(f"WhatsApp message sent to {to} (session={session or 'default'}): {data.get('status', 'ok')}")
-                return {"status": "sent", "to": to, "channel": "whatsapp", "session": session, "response": data}
+                data = resp.json() if resp.content else {}
+                wa_status = data.get("status") or data.get("result") or ""
+                error_msg = data.get("error") or data.get("message") or ""
+                actually_sent = resp.status_code < 300 and wa_status in ("sent", "success", "ok", "queued", "")
+                if actually_sent:
+                    logger.info(f"WhatsApp sent to {to}: {wa_status or 'ok'}")
+                    return {"status": "sent", "to": to, "channel": "whatsapp", "session": session, "response": data}
+                else:
+                    logger.warning(f"WhatsApp send to {to} failed (HTTP {resp.status_code}): {error_msg or wa_status}")
+                    return {"status": "failed", "to": to, "channel": "whatsapp", "session": session,
+                            "error": error_msg or wa_status or f"HTTP {resp.status_code}", "response": data}
         except httpx.RequestError as e:
             logger.warning(f"WhatsApp send_message failed (wa_bot unreachable at {self.base_url}): {e}")
-            return {"status": "failed", "to": to, "channel": "whatsapp", "session": session, "error": str(e)}
+            return {"status": "not_connected", "to": to, "channel": "whatsapp", "error": str(e),
+                    "reason": f"WhatsApp bridge is unreachable at {self.base_url}. Is it running?"}
         except Exception as e:
             logger.error(f"WhatsApp send_message error: {e}")
             return {"status": "failed", "to": to, "channel": "whatsapp", "session": session, "error": str(e)}

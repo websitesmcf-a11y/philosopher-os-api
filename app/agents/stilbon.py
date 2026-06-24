@@ -154,26 +154,60 @@ class Stilbon(BaseAgent):
 
         return {"status": "not_implemented", "tool": tool_name}
 
+    @staticmethod
+    def _normalize_phone(phone: str) -> str:
+        """Convert local SA numbers to international format (+27...)."""
+        digits = "".join(c for c in phone if c.isdigit())
+        if digits.startswith("0") and len(digits) == 10:
+            digits = "27" + digits[1:]
+        if not digits.startswith("+"):
+            digits = "+" + digits
+        return digits
+
     async def _do_send(self, phone: str, message: str, session: str = "", name: str = "") -> dict:
         from app.config import settings
         import httpx
+        phone = self._normalize_phone(phone)
         url = settings.wa_bot_url.rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
+                # Check connection first so we never lie about sending
+                params = {"session": session} if session else {}
+                status_resp = await client.get(f"{url}/status", params=params, timeout=5.0)
+                status_data = status_resp.json()
+                if "sessions" in status_data:
+                    connected = any(s.get("connected") for s in status_data.get("sessions", []))
+                else:
+                    connected = status_data.get("connected", False)
+                if not connected:
+                    return {
+                        "status": "not_sent",
+                        "reason": "WhatsApp is not connected — scan the QR code on the Integrations page first.",
+                        "to": phone,
+                    }
+
                 payload: dict = {"to": phone, "message": message}
                 if session:
                     payload["session"] = session
                 resp = await client.post(f"{url}/api/send", json=payload)
                 data = resp.json()
+
+                # Be honest: only report "sent" if the wa-bot confirmed it
+                wa_status = data.get("status") or data.get("result") or ""
+                error_msg = data.get("error") or data.get("message") or ""
+                actually_sent = wa_status in ("sent", "success", "ok", "queued") or resp.status_code < 300
+
                 return {
-                    "status": data.get("status", "sent"),
+                    "status": "sent" if actually_sent else "failed",
                     "to": phone,
                     **({"name": name} if name else {}),
-                    "session": session or "default",
+                    "wa_response": wa_status or str(data),
+                    **({"error": error_msg} if error_msg and not actually_sent else {}),
                 }
         except httpx.RequestError as e:
             return {
                 "status": "failed",
-                "reason": f"WhatsApp bridge unreachable at {url}. Is wa-bot running?",
+                "reason": f"WhatsApp bridge unreachable at {url}.",
                 "error": str(e),
+                "to": phone,
             }

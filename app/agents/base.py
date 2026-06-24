@@ -887,8 +887,15 @@ class BaseAgent(ABC):
                 return {"status": "error", "message": "phone is required"}
             if not message:
                 return {"status": "error", "message": "message is required"}
+            # Normalize SA local numbers to international format
+            digits = "".join(c for c in phone if c.isdigit())
+            if digits.startswith("0") and len(digits) == 10:
+                digits = "27" + digits[1:]
+            phone = ("+" + digits) if not digits.startswith("+") else digits
             from app.integrations.whatsapp import whatsapp
             result = await whatsapp.send_message(phone, message)
+            # whatsapp.send_message returns {"status": "sent"/"failed", ...}
+            # Pass through honestly — do NOT default to "sent"
             return result
 
         if tool_name == "search_knowledge":
