@@ -26,9 +26,7 @@ class WhatsAppClient:
             message: Message text.
             session: Session ID for multi-session wa-bot (optional).
         """
-        payload = {"to": to, "message": message}
-        if session:
-            payload["session"] = session
+        payload = {"to": to, "message": message, "session": session or "default"}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(

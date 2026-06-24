@@ -186,9 +186,7 @@ class Stilbon(BaseAgent):
                         "to": phone,
                     }
 
-                payload: dict = {"to": phone, "message": message}
-                if session:
-                    payload["session"] = session
+                payload: dict = {"to": phone, "message": message, "session": session or "default"}
                 resp = await client.post(f"{url}/api/send", json=payload)
                 data = resp.json()
 
