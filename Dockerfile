@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir -r requirements.txt playwright
 ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin
 RUN python -m playwright install chromium 2>/dev/null || true
 
-# Copy everything
+# Copy everything (cache-bust: 2026-06-24)
 COPY . .
 
 WORKDIR /app
