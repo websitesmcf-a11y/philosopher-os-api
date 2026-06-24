@@ -12,7 +12,10 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:3001",
         "https://philosopher-os.vercel.app",
+        "https://philosopher-os-frontend.vercel.app",
+        "https://philosopher-os-frontend3.vercel.app",
         "https://philosopher-os-frontend2.vercel.app",
+        "https://philosopher-os-frontend-git-main-websitesmcf-8823s-projects.vercel.app",
     ]
     log_level: str = "INFO"
     log_format: str = "json"  # "json" or "text"
