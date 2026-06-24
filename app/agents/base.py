@@ -317,6 +317,38 @@ class BaseAgent(ABC):
             },
         },
         {
+            "name": "search_knowledge",
+            "description": (
+                "Search the organisation's knowledge base — articles, uploaded files, leads, clients, "
+                "campaigns, and past conversations that have been synced. Use this before answering "
+                "any question about the business, its products, processes, pricing, clients, or history."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for"},
+                    "category": {
+                        "type": "string",
+                        "description": "Optional: filter by category — general, sales, process, research, leads, clients, campaigns, conversations, uploaded_files",
+                    },
+                    "limit": {"type": "integer", "description": "Max results (default 8, max 20)"},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "list_knowledge",
+            "description": "List all knowledge base articles/nodes, optionally filtered by category. Use to browse what's available.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Filter by category (optional)"},
+                    "limit": {"type": "integer", "description": "Max results (default 20)"},
+                },
+                "required": [],
+            },
+        },
+        {
             "name": "find_and_save_leads",
             "description": (
                 "END-TO-END lead generation: find real businesses by industry + location, save them "
@@ -777,6 +809,65 @@ class BaseAgent(ABC):
                     f"Saved {len(saved_ids)} as leads in list '{list_name}'."
                     + (f" Locked for campaign '{campaign_name}'." if should_reserve else "")
                 ),
+            }
+
+        if tool_name == "search_knowledge":
+            if not context or not context.db_session or not context.org_id:
+                return {"status": "error", "message": "No database session"}
+            from app.database.models import KnowledgeBase
+            from sqlalchemy import select, or_
+            import uuid as _uuid
+            query = args.get("query", "").lower()
+            category = args.get("category", "")
+            limit = min(int(args.get("limit", 8)), 20)
+            org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+            q = select(KnowledgeBase).where(KnowledgeBase.org_id == org_uuid)
+            if category:
+                q = q.where(KnowledgeBase.category == category)
+            rows = (await context.db_session.execute(q)).scalars().all()
+            # Simple text match scored by keyword hits
+            def score(entry) -> int:
+                blob = f"{entry.title} {entry.content or ''} {' '.join(entry.tags or [])}".lower()
+                return sum(1 for word in query.split() if word in blob)
+            ranked = sorted(rows, key=score, reverse=True)[:limit]
+            results = [
+                {
+                    "id": str(r.id),
+                    "title": r.title,
+                    "category": r.category or "general",
+                    "tags": r.tags or [],
+                    "preview": (r.content or "")[:300],
+                }
+                for r in ranked if score(r) > 0
+            ]
+            return {
+                "status": "success",
+                "query": args.get("query", ""),
+                "count": len(results),
+                "results": results,
+            }
+
+        if tool_name == "list_knowledge":
+            if not context or not context.db_session or not context.org_id:
+                return {"status": "error", "message": "No database session"}
+            from app.database.models import KnowledgeBase
+            from sqlalchemy import select
+            import uuid as _uuid
+            category = args.get("category", "")
+            limit = min(int(args.get("limit", 20)), 50)
+            org_uuid = _uuid.UUID(context.org_id) if isinstance(context.org_id, str) else context.org_id
+            q = select(KnowledgeBase).where(KnowledgeBase.org_id == org_uuid)
+            if category:
+                q = q.where(KnowledgeBase.category == category)
+            q = q.order_by(KnowledgeBase.created_at.desc()).limit(limit)
+            rows = (await context.db_session.execute(q)).scalars().all()
+            return {
+                "status": "success",
+                "count": len(rows),
+                "entries": [
+                    {"id": str(r.id), "title": r.title, "category": r.category or "general", "tags": r.tags or []}
+                    for r in rows
+                ],
             }
 
         return {"status": "unknown_tool", "tool": tool_name}
